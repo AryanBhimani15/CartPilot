@@ -32,8 +32,11 @@ dev-api:
 dev-web:
 	npm --prefix $(WEB_DIR) run dev
 
-test: db
-	@set -a; . ./.env; set +a; $(PY) pytest tests
+test:
+	@set -a; . ./.env; set +a; \
+	(cd $(API_DIR) && \
+	APP_ENV=test TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgresql+asyncpg:///cartpilot_test} \
+	uv run pytest tests)
 
 types:
 	@set -a; . ./.env; set +a; $(PY) python -m scripts.generate_openapi_types

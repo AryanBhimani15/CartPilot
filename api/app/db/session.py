@@ -17,7 +17,11 @@ from app.config import get_settings
 @lru_cache
 def get_engine() -> AsyncEngine:
     # NullPool keeps CLI/pytest runs from sharing asyncpg connections across event loops.
-    return create_async_engine(get_settings().database_url, pool_pre_ping=True, poolclass=NullPool)
+    return create_async_engine(
+        get_settings().resolved_database_url,
+        pool_pre_ping=True,
+        poolclass=NullPool,
+    )
 
 
 @lru_cache

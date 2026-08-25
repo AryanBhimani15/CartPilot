@@ -5,51 +5,60 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Offer, Product, ProductVariant
 from app.db.seed.catalog import (
     DATA_FILE,
     DELIBERATE_OUT_OF_STOCK,
     DEMO_PATH_SKUS,
-    SIZES,
+    FOOTWEAR_CATEGORIES,
+    load_products,
+    product_document,
     seed_catalog,
 )
-from app.db.session import get_session_factory
+from app.domain.enums import VariantAxis
 
 
-async def table_counts() -> tuple[int, int, int]:
-    async with get_session_factory()() as session:
-        counts: list[int] = []
-        for model in (Product, ProductVariant, Offer):
-            count = await session.scalar(select(func.count()).select_from(model))
-            assert count is not None
-            counts.append(count)
+async def table_counts(session: AsyncSession) -> tuple[int, int, int]:
+    counts: list[int] = []
+    for model in (Product, ProductVariant, Offer):
+        count = await session.scalar(select(func.count()).select_from(model))
+        assert count is not None
+        counts.append(count)
     return (counts[0], counts[1], counts[2])
 
 
-async def seeded_ids() -> tuple[set[object], set[object], set[object]]:
-    async with get_session_factory()() as session:
-        return (
-            set((await session.scalars(select(Product.id))).all()),
-            set((await session.scalars(select(ProductVariant.id))).all()),
-            set((await session.scalars(select(Offer.id))).all()),
-        )
+async def seeded_ids(session: AsyncSession) -> tuple[set[object], set[object], set[object]]:
+    return (
+        set((await session.scalars(select(Product.id))).all()),
+        set((await session.scalars(select(ProductVariant.id))).all()),
+        set((await session.scalars(select(Offer.id))).all()),
+    )
 
 
 @pytest.mark.asyncio
-async def test_seed_catalog_is_idempotent_and_meets_demo_guarantees() -> None:
-    await seed_catalog()
-    before = await table_counts()
-    ids_before = await seeded_ids()
-    await seed_catalog()
-    async with get_session_factory()() as session:
-        products = (await session.scalars(select(Product))).all()
-        variants = (await session.scalars(select(ProductVariant))).all()
-    after = await table_counts()
-    ids_after = await seeded_ids()
+async def test_seed_catalog_is_idempotent_and_meets_demo_guarantees(
+    seeded_catalog: AsyncSession,
+) -> None:
+    before = await table_counts(seeded_catalog)
+    ids_before = await seeded_ids(seeded_catalog)
+    await seed_catalog(seeded_catalog)
+    products = (await seeded_catalog.scalars(select(Product))).all()
+    variants = (await seeded_catalog.scalars(select(ProductVariant))).all()
+    after = await table_counts(seeded_catalog)
+    ids_after = await seeded_ids(seeded_catalog)
 
-    assert before == after == (31, 217, 3)
+    assert before == after
+    assert before[0] >= 140
+    assert before[1] > before[0]
+    assert before[2] == 3
     assert ids_before == ids_after
+    category_counts: dict[str, int] = {}
+    for product in products:
+        category_counts[product.category] = category_counts.get(product.category, 0) + 1
+    assert category_counts["running_shoes"] >= 50
+    assert all(count >= 4 for count in category_counts.values())
     stock_by_product = {product.id: 0 for product in products}
     for variant in variants:
         stock_by_product[variant.product_id] += variant.stock_qty
@@ -59,12 +68,12 @@ async def test_seed_catalog_is_idempotent_and_meets_demo_guarantees() -> None:
         for product in products
         if product.category == "running_shoes"
         and product.price_paise <= 499_900
-        and product.attrs["arch_support"] == "stability"
+        and product.attrs["footwear"]["arch_support"] == "stability"
         and stock_by_product[product.id] > 0
     ]
     assert len(stability_under_budget) >= 3
     assert any(
-        product.price_paise == 649_900 and product.attrs["arch_support"] == "stability"
+        product.price_paise == 649_900 and product.attrs["footwear"]["arch_support"] == "stability"
         for product in products
     )
     assert (
@@ -74,7 +83,7 @@ async def test_seed_catalog_is_idempotent_and_meets_demo_guarantees() -> None:
                 for product in products
                 if product.category == "running_shoes"
                 and product.price_paise <= 499_900
-                and product.attrs["arch_support"] == "neutral"
+                and product.attrs["footwear"]["arch_support"] == "neutral"
             ]
         )
         >= 2
@@ -83,6 +92,18 @@ async def test_seed_catalog_is_idempotent_and_meets_demo_guarantees() -> None:
     assert price_by_sku["RIV-SOCK-AB"] == 49_900
     assert price_by_sku["RIV-ORTHO-1"] == 89_900
     assert price_by_sku["RIV-ROLLER-CORE"] == 129_900
+    assert not any(
+        product.category == "running_shoes"
+        and product.attrs["footwear"]["arch_support"] == "motion_control"
+        and product.price_paise < 350_000
+        for product in products
+    )
+    out_of_stock_near_miss = next(
+        product for product in products if product.sku == "RIV-BRIDGE-OOS"
+    )
+    assert out_of_stock_near_miss.price_paise <= 499_900
+    assert out_of_stock_near_miss.attrs["footwear"]["arch_support"] == "stability"
+    assert out_of_stock_near_miss.attrs["use_case"] == "daily_easy_runs"
 
 
 def test_seed_data_contains_no_real_world_trademarks() -> None:
@@ -92,37 +113,70 @@ def test_seed_data_contains_no_real_world_trademarks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_demo_path_skus_are_in_stock_in_every_size() -> None:
+async def test_demo_path_skus_are_in_stock_in_every_size(seeded_catalog: AsyncSession) -> None:
     """Aggregate stock > 0 is not enough: the demo picks one size, not the sum of sizes."""
-    await seed_catalog()
-    async with get_session_factory()() as session:
-        rows = (
-            await session.execute(
-                select(Product.sku, ProductVariant.size, ProductVariant.stock_qty).join(
-                    ProductVariant, ProductVariant.product_id == Product.id
-                )
+    rows = (
+        await seeded_catalog.execute(
+            select(Product.sku, ProductVariant.size, ProductVariant.stock_qty).join(
+                ProductVariant, ProductVariant.product_id == Product.id
             )
-        ).all()
+        )
+    ).all()
 
     stock = {(sku, size): qty for sku, size, qty in rows}
     for sku in DEMO_PATH_SKUS:
-        for size in SIZES:
-            assert stock[(sku, size)] > 0, f"demo-path SKU {sku} is out of stock in {size}"
+        sku_quantities = [
+            quantity for (variant_sku, _), quantity in stock.items() if variant_sku == sku
+        ]
+        assert sku_quantities
+        assert all(quantity > 0 for quantity in sku_quantities)
 
 
 @pytest.mark.asyncio
-async def test_out_of_stock_variants_are_declared_not_incidental() -> None:
+async def test_out_of_stock_variants_are_declared_not_incidental(
+    seeded_catalog: AsyncSession,
+) -> None:
     """Every stockout is declared, so inventory scenarios are reproducible."""
-    await seed_catalog()
-    async with get_session_factory()() as session:
-        rows = (
-            await session.execute(
-                select(Product.sku, ProductVariant.size, ProductVariant.stock_qty)
-                .join(ProductVariant, ProductVariant.product_id == Product.id)
+    rows = (
+        await seeded_catalog.execute(
+            select(Product.sku, ProductVariant.size, ProductVariant.stock_qty).join(
+                ProductVariant, ProductVariant.product_id == Product.id
             )
-        ).all()
+        )
+    ).all()
 
     zero = {(sku, size) for sku, size, qty in rows if qty == 0}
     assert zero == set(DELIBERATE_OUT_OF_STOCK), (
         "stockouts must be declared in DELIBERATE_OUT_OF_STOCK, not hash-derived"
     )
+
+
+@pytest.mark.asyncio
+async def test_variants_and_attributes_are_category_aware(seeded_catalog: AsyncSession) -> None:
+    rows = (
+        await seeded_catalog.execute(
+            select(Product, ProductVariant).join(
+                ProductVariant, ProductVariant.product_id == Product.id
+            )
+        )
+    ).all()
+
+    for product, variant in rows:
+        if product.category in FOOTWEAR_CATEGORIES:
+            assert variant.axis == VariantAxis.FOOTWEAR_SIZE
+            assert variant.size.startswith("UK ")
+            assert "footwear" in product.attrs
+        else:
+            assert not variant.size.startswith("UK ")
+            assert variant.axis in {VariantAxis.APPAREL_SIZE, VariantAxis.ONE_SIZE}
+            assert "footwear" not in product.attrs
+
+    sock_variants = [variant for product, variant in rows if product.sku == "RIV-SOCK-AB"]
+    assert {variant.size for variant in sock_variants} == {"S", "M", "L", "XL"}
+    assert {variant.axis for variant in sock_variants} == {VariantAxis.APPAREL_SIZE}
+
+
+def test_non_footwear_product_documents_exclude_footwear_vocabulary() -> None:
+    gps_watch = next(product for product in load_products() if product["sku"] == "KORA-GPS-ONE")
+    document = product_document(gps_watch).lower()
+    assert not any(word in document for word in ("arch_support", "terrain", "drop", "cushioning"))

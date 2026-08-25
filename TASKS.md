@@ -99,7 +99,8 @@ gives the eval something honest to measure.
 - A test asserts each demo-path guarantee above holds against the seeded DB.
 - No real-world trademark appears in `products.json`.
 
-Completed 2026-08-25 — idempotent seed loads 31 products / 217 variants and 3 offers; database-backed tests verify stable IDs and every required demo-path guarantee.
+Initial completion 2026-08-25 — the original acceptance block passed. Catalog depth, test isolation,
+and category-aware seed corrections are completed in T-003a/b/c below.
 
 Reviewed 2026-08-25 (Claude) — acceptance block satisfied as written. Three gaps found that the
 acceptance criteria failed to encode; split into T-003a/b/c below. Claude directly fixed the
@@ -109,7 +110,7 @@ demo-breaking stock bug (see PROJECT_STATUS.md).
 
 ---
 
-### `[ ]` T-003a — Isolate the test database  ◄ **do this first**
+### `[x]` T-003a — Isolate the test database
 **Objective.** `make test` must not read or write the development database.
 
 **Files.** `api/tests/conftest.py`, `Makefile`, `.env.example`, `api/app/config.py`.
@@ -131,9 +132,11 @@ adds DB tests, so this compounds until the suite is untrustworthy.
 - A test asserting `TEST_DATABASE_URL != DATABASE_URL` fails the run when they match.
 - The suite passes twice consecutively from a clean and from a seeded dev DB.
 
+Completed 2026-08-25 — `make test` creates and migrates `cartpilot_test`, rejects equal URLs, snapshots the dev DB before/after the suite, and rolls back each database-writing test.
+
 ---
 
-### `[ ]` T-003b — Category-aware variant axes and attribute schema  ◄ **blocks T-004**
+### `[x]` T-003b — Category-aware variant axes and attribute schema
 **Objective.** Stop modelling every product as a shoe.
 
 **Files.** `api/app/db/seed/catalog.py`, `api/app/db/seed/data/products.json`,
@@ -167,9 +170,11 @@ foam roller; the T-003 upsell (`RIV-SOCK-AB`) forces a shoe-size choice on socks
 - Demo-path stock guarantees and `DELIBERATE_OUT_OF_STOCK` still hold after the axis change.
 - Adding `RIV-SOCK-AB` to a cart requires a sock size, not a shoe size.
 
+Completed 2026-08-25 — variants now use footwear/apparel/one-size axes with varied category colours; `attrs.footwear` and category-aware documents prevent non-footwear retrieval pollution.
+
 ---
 
-### `[ ]` T-003c — Expand the catalog to ~150 SKUs
+### `[x]` T-003c — Expand the catalog to ~150 SKUs
 **Objective.** Give retrieval and the evaluation something real to discriminate between.
 
 **Files.** `api/app/db/seed/data/products.json`, `api/tests/test_seed_catalog.py`.
@@ -195,6 +200,8 @@ set too small to be meaningful, and "unmet demand" analytics in T-010 has no tai
 - All existing demo-path guarantee tests still pass unchanged.
 - Hard-coded count assertions in tests are replaced by threshold assertions
   (`>= 140`, not `== 31`), so the catalog can grow without editing tests.
+
+Completed 2026-08-25 — deterministic expansion produces 140 products, including 59 running shoes; threshold tests cover category breadth and the deliberate no-motion-control-under-₹3,500 demand gap.
 
 ## PHASE 2 — PRODUCT INTELLIGENCE
 

@@ -47,3 +47,9 @@ class EventType(str, Enum):
     UPSELL_ACCEPTED = "upsell_accepted"
     CHECKOUT_STARTED = "checkout_started"
     PAYMENT_SUCCEEDED = "payment_succeeded"
+
+
+class VariantAxis(str, Enum):
+    FOOTWEAR_SIZE = "footwear_size"
+    APPAREL_SIZE = "apparel_size"
+    ONE_SIZE = "one_size"

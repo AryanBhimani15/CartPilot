@@ -1,17 +1,14 @@
 # CartPilot AI — Project Status
 
-**Last updated:** 2026-08-25 (Claude, tech lead — post T-001…T-003 review)
+**Last updated:** 2026-08-25 (Codex, implementation — T-003 follow-ups)
 **Target:** Razorpay AI Builder Internship 2026 — AI Growth & Agentic Commerce
 
 ---
 
 ## Current phase
 
-**Phase 1 complete, reviewed.** T-001, T-002 and T-003 are merged (`a6c1600`). Claude has
-reviewed them and applied fixes on top; three follow-ups are queued as T-003a/b/c.
-
-Phase 2 (T-004, hybrid search) is **gated on T-003b** — embedding a polluted document set would
-be work thrown away.
+**Phase 1 complete, reviewed.** T-001 through T-003c are complete. Phase 2 may now start at
+T-004: seed documents are category-aware and the catalog has enough product depth for retrieval.
 
 ---
 
@@ -20,9 +17,13 @@ be work thrown away.
 - `make setup / db / seed / dev / test / types / typecheck / lint` all run clean
 - `GET /api/v1/health` performs a real Postgres round-trip
 - Full typed schema + Alembic migration; enum create/drop verified over repeated up/down cycles
-- Idempotent, deterministic catalog seed (31 products / 217 variants / 3 offers), stable IDs
+- Idempotent, deterministic catalog seed (140 products / 703 variants / 3 offers), stable IDs
+- `make test` creates and uses only `cartpilot_test`; it rejects equal dev/test URLs, rolls back
+  per-test writes, and verifies dev table counts plus `max(updated_at)` are unchanged.
+- Category-aware variants: footwear uses UK sizes, socks/apparel use S/M/L/XL, insoles use S/M/L,
+  and recovery/hydration/GPS products use One Size. Footwear-only facts live in `attrs.footwear`.
 - `/shop` and `/dashboard` render; the visual direction is distinctive, not templated
-- **Verified green:** 7 pytest tests, `mypy --strict app`, ruff, eslint, tsc
+- **Verified green:** 10 pytest tests, `mypy --strict app`, ruff, eslint, tsc
 
 ---
 
@@ -34,9 +35,9 @@ Findings from the T-001…T-003 review, highest severity first.
 |---|---|---|---|
 | 1 | `RIV-STRIDE-34` — the flagship demo shoe — was **out of stock in UK 9**. Stockouts were hash-derived (`digest % 13`), so 22/217 variants were zero by accident. The seed test only checked stock summed across sizes, so it passed. | Demo-breaking | **Fixed by Claude** |
 | 2 | `make types` was a no-op: the generator fetched the OpenAPI schema, discarded it, and wrote a hardcoded `HealthResponse` string. It would have silently produced wrong types from T-004 onward. | Hallucinated functionality | **Fixed by Claude** |
-| 3 | `make test` runs against the **dev** database and `test_seed_catalog` writes to it. Confirmed: a test run left all 217 variants in dev `cartpilot`. | High — compounds | **T-003a** |
-| 4 | Every product gets shoe sizes UK 6–12: a foam roller in UK 9, a GPS watch in UK 11. Shoe-only `attrs` on every category pollute `product_document()`, which feeds `search_tsv` and T-004 embeddings. | High — blocks T-004 | **T-003b** |
-| 5 | Catalog is 31 SKUs against a spec of 180–220. Too thin for retrieval to discriminate or for T-012 precision@k to mean anything. | Medium | **T-003c** |
+| 3 | Tests previously wrote to the dev database. | High — compounds | **Fixed (T-003a)** |
+| 4 | Non-footwear previously used shoe variants and polluted retrieval documents. | High — blocked T-004 | **Fixed (T-003b)** |
+| 5 | Catalog previously had only 31 products. | Medium | **Fixed (T-003c: 140 products / 59 running shoes)** |
 | 6 | `mypy --strict` ran on `app/db app/domain` only; the wider app had an error. | Low | **Fixed by Claude** |
 | 7 | `products.sku` and `offers.code` are globally unique rather than unique per `merchant_id`. | Low | Accept for now; revisit if a second merchant appears |
 | 8 | `NullPool` is used for the API server, not just for CLI/pytest — a new connection per request. | Low | Revisit under T-014 |
@@ -104,8 +105,8 @@ agent being *stopped by deterministic policy* is what makes this read as enginee
 1. **T-004** hybrid search — Codex
 5. **Aryan**: obtain Razorpay test-mode credentials and an LLM API key before Phase 3 ends
 
-**Claude's next action:** review T-001–T-003 against their acceptance criteria, especially the
-full migration's enum lifecycle and catalog taxonomy, then direct T-004.
+**Claude's next action:** review T-003a/b/c, especially test-database containment and category-
+aware seed documents, then direct T-004.
 
 ---
 

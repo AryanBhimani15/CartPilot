@@ -27,12 +27,19 @@ from app.domain.enums import (
     PaymentStatus,
     PolicyDecision,
     SessionOutcome,
+    VariantAxis,
 )
 
 
 def native_enum(
     enum_class: type[
-        EventType | OfferType | OrderStatus | PaymentStatus | PolicyDecision | SessionOutcome
+        EventType
+        | OfferType
+        | OrderStatus
+        | PaymentStatus
+        | PolicyDecision
+        | SessionOutcome
+        | VariantAxis
     ],
 ) -> SqlEnum:
     enum_names = {
@@ -42,6 +49,7 @@ def native_enum(
         PaymentStatus: "payment_status",
         PolicyDecision: "policy_decision",
         SessionOutcome: "session_outcome",
+        VariantAxis: "variant_axis",
     }
     return SqlEnum(
         enum_class,
@@ -114,6 +122,7 @@ class ProductVariant(Base, IdMixin, DemoMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
     )
     sku: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    axis: Mapped[VariantAxis] = mapped_column(native_enum(VariantAxis), nullable=False)
     size: Mapped[str] = mapped_column(String(20), nullable=False)
     colour: Mapped[str | None] = mapped_column(String(40), nullable=True)
     stock_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
