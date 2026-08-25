@@ -328,6 +328,70 @@ landed with database-enforced stock bounds. Cart prices are snapshotted, offers 
 solely from `offers`, and order creation reserves stock atomically before payment. 26 isolated
 tests, strict mypy, ruff, TypeScript, ESLint, OpenAPI generation, and repeat migration cycles pass.
 
+**Reviewed 2026-08-25 (Claude).** The design is right: price snapshots, DB-only offer maths,
+canonical fingerprints, reservation separated from decrement. Cart-lock ordering is **correct** —
+`add_to_cart`, `remove_from_cart` and `apply_offer` all take `_locked_cart()` *before*
+`_ensure_cart_is_editable()`, so a concurrent `create_order` serialises on the cart row rather
+than racing the guard.
+
+One critical defect found, and it was invisible to the shipped tests:
+
+**Concurrent checkout of the last unit from two carts oversold.** `reserve_stock()` takes
+`SELECT … FOR UPDATE`, but `_cart_lines()` has already loaded those `ProductVariant` rows into
+the session's identity map earlier in `create_order()`. Without `populate_existing=True`,
+SQLAlchemy returns the **cached pre-lock instance**, so `reserved_qty` is read at its stale value
+and the row lock protects nothing. Two concurrent checkouts both succeeded on `stock_qty=1`.
+
+The shipped concurrency test missed it because it exercised concurrent `add_to_cart` on a single
+cart — and carts deliberately do not reserve inventory, so that path never reaches
+`reserve_stock()`. The oversell risk lives entirely at order creation.
+
+Fixed by Claude: `populate_existing=True` on the locked select, plus a test that drives two real
+concurrent `create_order()` calls on separate connections. Verified deterministic — fails 3/3
+without the fix, passes 3/3 with it.
+
+Also added: `capture_order_stock()` and `release_order_reservation()` now verify
+`order.cart_fingerprint` before moving stock. The field existed precisely to detect cart drift and
+nothing was checking it. Structural fix tracked as **T-005a**.
+
+---
+
+### `[ ]` T-005a — Orders must carry their own line items  ◄ **before T-009**
+**Objective.** An order is a financial record. It cannot depend on a mutable cart for its contents.
+
+**Files.** `api/app/db/models.py`, new Alembic migration, `api/app/commerce/orders.py`,
+`api/tests/test_commerce.py`.
+
+**Problem found in review.** There is no `order_items` table. `Order` stores `amount_paise`,
+`cart_fingerprint` and `cart_id` — nothing about *what was bought*. So
+`capture_order_stock()` and `release_order_reservation()` re-derive their quantities by
+re-reading the cart at capture/release time, i.e. from the very state the order exists to freeze.
+Today the active-checkout cart lock makes drift impossible, so this is not currently exploitable
+— but the invariant lives in a convention spread across two modules rather than in data.
+
+It also **blocks T-010**: "upsell revenue", "cross-sell pairs" and "AI revenue by product" are all
+product-level questions, and `orders.amount_paise` cannot answer any of them. Do this before
+T-009 builds payment reconciliation on top of the current shape.
+
+**Details.**
+- `order_items`: `order_id`, `variant_id`, `product_id`, `sku`, `title`, `quantity`,
+  `unit_price_paise`, `line_total_paise`. Denormalise sku/title deliberately — a receipt must
+  survive a catalog edit.
+- `create_order()` writes the snapshot inside the same transaction as `reserve_stock()`.
+- `capture_order_stock()` / `release_order_reservation()` take their reservations from
+  `order_items`, never from the cart.
+- Once they do, `_assert_cart_still_matches_order()` (added by Claude as a tripwire) can be
+  dropped from the capture/release path — keep a fingerprint check where the *user* confirms,
+  which is what D-008 actually requires.
+
+**Acceptance.**
+- Capture and release read only `order_items`; a test mutates the cart directly (bypassing the
+  lock) after order creation and asserts stock movement still matches what was reserved.
+- Order totals reconcile: `sum(line_total_paise) - discount == orders.amount_paise`.
+- A test asserts product-level revenue is derivable from `order_items` alone.
+
+---
+
 ### `[ ]` T-006 — Policy engine
 **Objective.** Implement all 9 rules in `ARCHITECTURE.md` §7 as pure functions with `rule_id`s.
 **Files.** `api/app/policy/{decisions.py,rules.py,engine.py}`, `api/tests/test_policy.py`.

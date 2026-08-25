@@ -43,6 +43,10 @@ async def _locked_variants(
             .where(ProductVariant.id.in_(ids))
             .order_by(ProductVariant.id)
             .with_for_update()
+            # Without populate_existing, SQLAlchemy returns the instance already in this
+            # session's identity map -- loaded by _cart_lines BEFORE the lock was taken --
+            # so reserved_qty is read at pre-lock values and FOR UPDATE protects nothing.
+            .execution_options(populate_existing=True)
         )
     ).all()
     by_id = {variant.id: variant for variant in variants}

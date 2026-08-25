@@ -11,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.commerce.cart import add_to_cart, apply_offer, create_cart, recompute_cart_totals
 from app.commerce.fingerprint import FingerprintItem, cart_fingerprint
 from app.commerce.orders import capture_order_stock, create_order, release_order_reservation
-from app.db.models import Cart, CartItem, Merchant, Product, ProductVariant, Session
+from app.db.models import (
+    Cart,
+    CartItem,
+    Merchant,
+    Order,
+    Product,
+    ProductVariant,
+    Session,
+)
 from app.db.seed.catalog import MERCHANT_ID
 from app.db.session import get_session_factory
 from app.domain.enums import OrderStatus, SessionOutcome, VariantAxis
@@ -214,3 +222,97 @@ async def test_concurrent_last_unit_add_to_same_cart_never_exceeds_stock() -> No
                 await cleanup_session.execute(delete(Product).where(Product.id == product_id))
                 await cleanup_session.execute(delete(Session).where(Session.id == session_id))
                 await cleanup_session.execute(delete(Merchant).where(Merchant.id == merchant_id))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_checkout_of_the_last_unit_from_two_carts_never_oversells() -> None:
+    """The oversell risk lives at order creation, not in the cart.
+
+    Carts deliberately do not reserve global inventory, so two shoppers can both hold the
+    last unit in their carts. The only thing standing between that and an oversell is the
+    FOR UPDATE in reserve_stock. This drives two real concurrent create_order calls on
+    separate connections; exactly one must win.
+    """
+    merchant_id = uuid.uuid4()
+    product_id = uuid.uuid4()
+    variant_id = uuid.uuid4()
+    cart_ids: list[uuid.UUID] = []
+    session_ids: list[uuid.UUID] = []
+    session_factory = get_session_factory()
+
+    async with session_factory() as setup:
+        async with setup.begin():
+            setup.add(Merchant(id=merchant_id, name=f"Oversell Merchant {merchant_id}"))
+            setup.add(
+                Product(
+                    id=product_id,
+                    merchant_id=merchant_id,
+                    sku=f"OVERSELL-{product_id}",
+                    title="Last Unit Runner",
+                    brand="Test Brand",
+                    category="running_shoes",
+                    subcategory="test",
+                    price_paise=100_000,
+                    description="Test product",
+                    attrs={"use_case": "daily_easy_runs", "gender": "unisex"},
+                )
+            )
+            setup.add(
+                ProductVariant(
+                    id=variant_id,
+                    product_id=product_id,
+                    sku=f"OVERSELL-VARIANT-{variant_id}",
+                    axis=VariantAxis.FOOTWEAR_SIZE,
+                    size="UK 9",
+                    colour="Black",
+                    stock_qty=1,
+                    reserved_qty=0,
+                )
+            )
+            await setup.flush()
+            for _ in range(2):
+                commerce_session = Session(
+                    merchant_id=merchant_id, outcome=SessionOutcome.ACTIVE, is_demo=True
+                )
+                setup.add(commerce_session)
+                await setup.flush()
+                session_ids.append(commerce_session.id)
+                cart = await create_cart(setup, commerce_session.id, merchant_id)
+                # Both carts hold the same last unit. This is allowed by design.
+                await add_to_cart(setup, cart.id, variant_id, 1)
+                cart_ids.append(cart.id)
+
+    start = asyncio.Event()
+
+    async def checkout(cart_id: uuid.UUID) -> str:
+        await start.wait()
+        try:
+            async with session_factory() as transaction_session:
+                async with transaction_session.begin():
+                    await create_order(transaction_session, cart_id)
+            return "ordered"
+        except ValidationError as error:
+            assert error.code == "STOCK_UNAVAILABLE", error.code
+            return "rejected"
+
+    tasks = [asyncio.create_task(checkout(cart_id)) for cart_id in cart_ids]
+    start.set()
+    results = await asyncio.gather(*tasks)
+
+    try:
+        async with session_factory() as check:
+            variant = await check.scalar(
+                select(ProductVariant).where(ProductVariant.id == variant_id)
+            )
+        assert variant is not None
+        assert sorted(results) == ["ordered", "rejected"]
+        assert variant.reserved_qty == 1
+        assert variant.reserved_qty <= variant.stock_qty
+    finally:
+        async with session_factory() as cleanup:
+            async with cleanup.begin():
+                await cleanup.execute(delete(Order).where(Order.merchant_id == merchant_id))
+                await cleanup.execute(delete(Cart).where(Cart.id.in_(cart_ids)))
+                await cleanup.execute(delete(Product).where(Product.id == product_id))
+                await cleanup.execute(delete(Session).where(Session.id.in_(session_ids)))
+                await cleanup.execute(delete(Merchant).where(Merchant.id == merchant_id))

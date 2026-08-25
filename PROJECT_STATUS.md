@@ -7,31 +7,22 @@
 
 ## Current phase
 
-**Phase 3 deterministic write layer complete.** T-004 is reviewed and T-005 now owns every
-cart, offer, inventory, and order-state write. T-006 (policy engine) is unblocked; T-004a remains
-an independent retrieval-quality follow-up.
+**T-005 merged (`96a030d`), reviewed, one critical oversell bug fixed on top.** T-006 (policy
+engine) is unblocked. T-005a queued and must land before T-009.
 
 ---
 
 ## What works
 
-- Hybrid catalog search: hard SQL constraints → semantic + lexical → RRF → transparent business
-  re-rank, with a per-hit `score_breakdown` for the audit trail
-- **Arch support is now a hard filter** — the flagship demo query returns 8/8 stability or
-  motion-control shoes, all in budget, all in stock (was 6/8 neutral)
-- `match_reasons` computed from filters and catalog rows, never model-authored (D-012)
-- Embedding cache keyed on content hash; seed-time refresh; numpy index preloaded at startup
-- Deterministic commerce services: cart item prices are snapshotted; offers are recalculated from
-  seeded database rows only; order creation atomically reserves stock; failure/expiry releases it;
-  verified payment capture decrements it
-- Cart fingerprints hash canonical line-item commitments and totals. Active checkout locks cart
-  edits, so later stock release/capture always acts on the frozen line items
-- Database checks enforce `stock_qty >= 0` and `0 <= reserved_qty <= stock_qty`; a concurrent
-  same-cart add on a last unit produces one committed item and one `STOCK_UNAVAILABLE` rejection
-- Isolated test database; dev DB provably unchanged across runs
-- 140 products / 703 variants, coherent prose, declared stockouts
-- **Verified green:** 26 pytest, `mypy --strict app`, ruff, eslint, tsc, OpenAPI codegen; inventory
-  constraint migration downgrade/upgrade cycles pass twice on the isolated test database
+- Cart price snapshots, database-only offer recalculation, canonical cart fingerprints
+- Reservation lifecycle: reserve at order creation, release on failure, decrement on capture
+- DB `CHECK` constraints reject invalid stock/reservation states
+- **Cart-lock ordering is correct** — all three mutation paths take `_locked_cart()` before
+  `_ensure_cart_is_editable()`, so a concurrent `create_order` serialises on the cart row
+- **Concurrent checkout of the last unit from two carts now yields exactly one order**
+  (this was broken; see below)
+- Hybrid catalog search with hard filters incl. arch support; isolated test DB; coherent catalog
+- **Verified green:** 27 pytest, `mypy --strict app`, ruff, eslint, tsc
 
 ---
 
@@ -39,31 +30,28 @@ an independent retrieval-quality follow-up.
 
 | # | Finding | Severity | State |
 |---|---|---|---|
-| 1 | `DeterministicEmbeddingProvider` hardcoded shopper-phrase → catalog-vocabulary mappings (`flat feet` → `stability, motion_control`). This provider is the **default for `make eval`** (D-005), so it would have manufactured CartPilot's relevance advantage in T-012 and reported it as semantic retrieval. | Critical — fabricated metric | **Fixed by Claude** |
-| 2 | Arch support was a soft ranking signal: 6 of the top 8 hits on the flagship demo query were neutral shoes. The test asserted only `>= 2` non-neutral, calibrated to what the system produced rather than to a correct result. | High — wrong demo output | **Fixed by Claude** (D-013) |
-| 3 | N+1 queries: one `SELECT` per candidate for sizes, 141 round-trips per unfiltered search, in the hot path of every agent tool call. | Medium | **Fixed by Claude** |
-| 4 | The semantic arm is **untested**. All 18 T-004 tests passed with the domain mapping deleted, and lexical scores 0 on the flagship query — so the suite exercises filters and lexical only. | Medium | **T-004a** |
-| 5 | Generated rows inherit archetype titles ("Cloudline 5 Series 5" on a stability shoe) | Low | T-014 |
-| 6 | `products.sku` / `offers.code` globally unique rather than per-merchant | Low | Accept |
-| 7 | `NullPool` on the API server, not just CLI/pytest | Low | T-014 |
+| 1 | **Oversell under concurrent checkout.** `reserve_stock()` takes `SELECT … FOR UPDATE`, but `_cart_lines()` had already loaded those variants into the session's identity map earlier in `create_order()`. Without `populate_existing=True` SQLAlchemy returned the cached **pre-lock** instance, so `reserved_qty` was read stale and the row lock protected nothing. Two concurrent checkouts both succeeded on `stock_qty=1`. | Critical — sells inventory that does not exist | **Fixed by Claude** |
+| 2 | The shipped concurrency test exercised concurrent `add_to_cart` on one cart. Carts deliberately don't reserve inventory, so that path never reaches `reserve_stock()` — the oversell risk lives entirely at order creation and was untested. | High — masked #1 | **Fixed by Claude** (new test) |
+| 3 | `capture_order_stock()` / `release_order_reservation()` never verified `order.cart_fingerprint` before moving stock, though the field exists precisely to detect that drift. | Medium | **Fixed by Claude** (tripwire) |
+| 4 | **No `order_items` table.** Orders re-derive their contents from the mutable cart. Not exploitable today thanks to the cart lock, but the invariant lives in convention across two modules — and it blocks T-010 product-level analytics entirely. | High — blocks T-010, must precede T-009 | **T-005a** |
+| 5 | Semantic retrieval arm untested | Medium | T-004a |
+| 6 | `_locked_variants` relies on `ORDER BY id` for lock ordering; safe with a PK index scan, theoretically not if Postgres chooses seq-scan + sort | Low | Note only |
+| 7 | Generated rows inherit archetype titles; global SKU uniqueness; `NullPool` on the API server | Low | T-014 |
 
 **Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed before T-007/T-009.
-An `EMBEDDING_API_KEY` is also needed to demo real semantic quality (D-014).
 
 ---
 
 ## What Claude changed in this pass
 
-- `api/app/catalog/embeddings.py` — removed the query→catalog vocabulary injection; `_tokens` is
-  now domain-agnostic
-- `api/app/catalog/search.py` — `SearchFilters.arch_support` as a hard SQL filter (D-013);
-  `match_reasons` follows the filter rather than a substring of the query; N+1 size lookup
-  replaced with one grouped query
-- `api/app/api/catalog.py` — endpoint exposes `arch_support`; OpenAPI + `web/types/api.ts` regenerated
-- `api/tests/test_search.py` — flat-feet test now asserts **all** hits satisfy arch support;
-  new test blocks reintroduction of the synonym table; new test proves neutral shoes are excluded
-- `DECISIONS.md` — D-013 (hard filters for constraint-bearing intent), D-014 (two AI vendors),
-  D-015 (keep the pgvector fail-fast adapter)
+- `api/app/commerce/inventory.py` — `populate_existing=True` on the locked select, so
+  `FOR UPDATE` reads post-lock values instead of the identity map's stale copy
+- `api/tests/test_commerce.py` — new test driving two real concurrent `create_order()` calls on
+  separate connections for one unit of stock. **Verified deterministic**: fails 3/3 without the
+  fix, passes 3/3 with it
+- `api/app/commerce/orders.py` — `_assert_cart_still_matches_order()`; capture and release now
+  verify the fingerprint before moving stock
+- `TASKS.md` — T-005a (order line items), sequenced before T-009
 
 ## Recent decisions
 

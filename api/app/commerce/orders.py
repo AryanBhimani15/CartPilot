@@ -68,6 +68,42 @@ async def create_order(session: AsyncSession, cart_id: uuid.UUID) -> Order:
     return order
 
 
+async def _assert_cart_still_matches_order(
+    session: AsyncSession, order: Order, rows: list[tuple[CartItem, ProductVariant, Product]]
+) -> None:
+    """Refuse to move stock when the cart no longer matches what the order froze.
+
+    `Order.cart_fingerprint` exists to detect exactly this drift, but nothing was checking it.
+    Because the order stores no line items of its own, capture and release re-derive their
+    quantities from the cart — so if the cart ever drifts, they would move the wrong stock.
+    The active-checkout cart lock currently makes drift impossible, which makes this a
+    tripwire rather than a behaviour change: it converts an invariant enforced by convention
+    across two modules into one enforced at the point of use. Remove it only once orders
+    carry their own line items (T-005a).
+    """
+    cart = await session.scalar(select(Cart).where(Cart.id == order.cart_id).with_for_update())
+    if cart is None:
+        raise RuntimeError("Order cart is missing")
+    totals = await recompute_cart_totals(session, cart)
+    current = cart_fingerprint(
+        [
+            FingerprintItem(
+                variant_id=item.variant_id,
+                quantity=item.quantity,
+                unit_price_paise=item.unit_price_paise,
+            )
+            for item, _, _ in rows
+        ],
+        totals.total_paise,
+    )
+    if current != order.cart_fingerprint:
+        raise ValidationError(
+            "CART_CHANGED",
+            "The cart changed after this order was created.",
+            "Create a new order for the current cart.",
+        )
+
+
 async def _locked_order(session: AsyncSession, order_id: uuid.UUID) -> Order:
     order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
     if order is None:
@@ -90,10 +126,9 @@ async def release_order_reservation(
         raise ValidationError(
             "ORDER_ALREADY_PAID", "A paid order cannot be released.", "Review payment status."
         )
-    cart = await session.scalar(select(Cart).where(Cart.id == order.cart_id))
-    if cart is None:
-        raise RuntimeError("Order cart is missing")
-    await release_stock(session, _reservations(await _cart_lines(session, cart.id)))
+    rows = await _cart_lines(session, order.cart_id)
+    await _assert_cart_still_matches_order(session, order, rows)
+    await release_stock(session, _reservations(rows))
     order.status = status
     await session.flush()
     return order
@@ -108,10 +143,9 @@ async def capture_order_stock(session: AsyncSession, order_id: uuid.UUID) -> Ord
         raise ValidationError(
             "ORDER_NOT_PAYABLE", "This order is no longer payable.", "Create a new order."
         )
-    cart = await session.scalar(select(Cart).where(Cart.id == order.cart_id))
-    if cart is None:
-        raise RuntimeError("Order cart is missing")
-    await capture_stock(session, _reservations(await _cart_lines(session, cart.id)))
+    rows = await _cart_lines(session, order.cart_id)
+    await _assert_cart_still_matches_order(session, order, rows)
+    await capture_stock(session, _reservations(rows))
     order.status = OrderStatus.PAID
     await session.flush()
     return order
