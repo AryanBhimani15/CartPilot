@@ -312,7 +312,7 @@ it speculatively).
 
 ## PHASE 3 — AGENT
 
-### `[ ]` T-005 — Commerce services + cart fingerprint
+### `[x]` T-005 — Commerce services + cart fingerprint
 **Objective.** The deterministic write layer. Nothing else may write commerce state.
 **Files.** `api/app/commerce/{cart.py,inventory.py,offers.py,orders.py,fingerprint.py}`, tests.
 **Details.** Cart items snapshot `unit_price_paise` at add-time. Offers recomputed server-side
@@ -322,6 +322,11 @@ failure/expiry.
 **Acceptance.** Unit tests for: budget maths in paise, offer cap behaviour, fingerprint changes
 on qty/price/line-item change and *only* on those, stock reservation release on failure.
 Concurrent `add_to_cart` on the last unit oversells zero times.
+
+Completed 2026-08-25 — deterministic cart, offer, inventory, order, and fingerprint services
+landed with database-enforced stock bounds. Cart prices are snapshotted, offers are recalculated
+solely from `offers`, and order creation reserves stock atomically before payment. 26 isolated
+tests, strict mypy, ruff, TypeScript, ESLint, OpenAPI generation, and repeat migration cycles pass.
 
 ### `[ ]` T-006 — Policy engine
 **Objective.** Implement all 9 rules in `ARCHITECTURE.md` §7 as pure functions with `rule_id`s.

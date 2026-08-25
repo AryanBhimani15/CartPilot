@@ -1,14 +1,15 @@
 # CartPilot AI — Project Status
 
-**Last updated:** 2026-08-25 (Codex, implementation — T-004 hybrid search)
+**Last updated:** 2026-08-25 (Codex, implementation — T-005 commerce write layer)
 **Target:** Razorpay AI Builder Internship 2026 — AI Growth & Agentic Commerce
 
 ---
 
 ## Current phase
 
-**Phase 2 complete and reviewed.** T-004 merged (`eae9de0`), reviewed, three defects fixed on top.
-T-005 (commerce services) is unblocked. One follow-up queued as T-004a.
+**Phase 3 deterministic write layer complete.** T-004 is reviewed and T-005 now owns every
+cart, offer, inventory, and order-state write. T-006 (policy engine) is unblocked; T-004a remains
+an independent retrieval-quality follow-up.
 
 ---
 
@@ -20,9 +21,17 @@ T-005 (commerce services) is unblocked. One follow-up queued as T-004a.
   motion-control shoes, all in budget, all in stock (was 6/8 neutral)
 - `match_reasons` computed from filters and catalog rows, never model-authored (D-012)
 - Embedding cache keyed on content hash; seed-time refresh; numpy index preloaded at startup
+- Deterministic commerce services: cart item prices are snapshotted; offers are recalculated from
+  seeded database rows only; order creation atomically reserves stock; failure/expiry releases it;
+  verified payment capture decrements it
+- Cart fingerprints hash canonical line-item commitments and totals. Active checkout locks cart
+  edits, so later stock release/capture always acts on the frozen line items
+- Database checks enforce `stock_qty >= 0` and `0 <= reserved_qty <= stock_qty`; a concurrent
+  same-cart add on a last unit produces one committed item and one `STOCK_UNAVAILABLE` rejection
 - Isolated test database; dev DB provably unchanged across runs
 - 140 products / 703 variants, coherent prose, declared stockouts
-- **Verified green:** 20 pytest, `mypy --strict app`, ruff, eslint, tsc, OpenAPI codegen
+- **Verified green:** 26 pytest, `mypy --strict app`, ruff, eslint, tsc, OpenAPI codegen; inventory
+  constraint migration downgrade/upgrade cycles pass twice on the isolated test database
 
 ---
 
@@ -37,7 +46,6 @@ T-005 (commerce services) is unblocked. One follow-up queued as T-004a.
 | 5 | Generated rows inherit archetype titles ("Cloudline 5 Series 5" on a stability shoe) | Low | T-014 |
 | 6 | `products.sku` / `offers.code` globally unique rather than per-merchant | Low | Accept |
 | 7 | `NullPool` on the API server, not just CLI/pytest | Low | T-014 |
-| 8 | No `CHECK` on `stock_qty >= 0` / `reserved_qty <= stock_qty` | Low | Fold into T-005 |
 
 **Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed before T-007/T-009.
 An `EMBEDDING_API_KEY` is also needed to demo real semantic quality (D-014).
@@ -95,17 +103,16 @@ agent being *stopped by deterministic policy* is what makes this read as enginee
 
 ## Next priorities
 
-1. **T-005** commerce services + cart fingerprint — Codex
+1. **T-006** policy engine — Codex
 2. **Aryan**: obtain Razorpay test-mode credentials and an LLM API key before Phase 3 ends
 
-**Claude's next action:** review T-004's hybrid ranking and cache boundary — especially the
-₹6,500 hard-budget exclusion and the nonzero lexical contribution on `GPS watch` — then direct
-T-005.
+**Claude's next action:** review T-005's cart-lock/reservation lifecycle and transaction boundary,
+then direct T-006.
 
 ---
 
 ## Demo readiness
 
-**3 / 10.** The foundation, coherent catalog, and retrieval tool are working, but the customer
-experience, agent, policy layer, and Razorpay flow remain. The realistic path to a credible
-5-minute demo is T-005→T-009, then T-010→T-013.
+**4 / 10.** The foundation, coherent catalog, retrieval tool, and deterministic commerce layer
+are working. The policy layer, agent, customer experience, and Razorpay flow remain. The realistic
+path to a credible 5-minute demo is T-006→T-009, then T-010→T-013.

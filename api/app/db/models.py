@@ -8,6 +8,7 @@ from sqlalchemy import (
     REAL,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -116,6 +117,11 @@ class ProductVariant(Base, IdMixin, DemoMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_product_variants_product_size", "product_id", "size"),
         Index("uq_product_variants_product_size", "product_id", "size", unique=True),
+        CheckConstraint("stock_qty >= 0", name="ck_product_variants_stock_nonnegative"),
+        CheckConstraint(
+            "reserved_qty >= 0 AND reserved_qty <= stock_qty",
+            name="ck_product_variants_reserved_within_stock",
+        ),
     )
 
     product_id: Mapped[uuid.UUID] = mapped_column(
