@@ -1,6 +1,47 @@
 {
   "components": {
     "schemas": {
+      "ConfirmCartRequest": {
+        "properties": {
+          "action": {
+            "enum": [
+              "create_razorpay_order",
+              "place_order"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "action"
+        ],
+        "title": "ConfirmCartRequest",
+        "type": "object"
+      },
+      "ConfirmCartResponse": {
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "title": "ConfirmCartResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -160,6 +201,48 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/cart/confirm": {
+      "post": {
+        "description": "Mint a cart-bound token only in response to an explicit user UI action.",
+        "operationId": "confirm_cart_api_v1_cart_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmCartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmCartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Cart",
+        "tags": [
+          "cart"
+        ]
+      }
+    },
     "/api/v1/catalog/products/search": {
       "get": {
         "description": "Return products after SQL constraints, hybrid RRF and transparent re-ranking.",

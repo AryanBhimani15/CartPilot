@@ -1,14 +1,15 @@
 # CartPilot AI — Project Status
 
-**Last updated:** 2026-08-25 (Codex, implementation — T-005 commerce write layer)
+**Last updated:** 2026-08-25 (Codex, implementation — T-006 policy engine)
 **Target:** Razorpay AI Builder Internship 2026 — AI Growth & Agentic Commerce
 
 ---
 
 ## Current phase
 
-**T-005 merged (`96a030d`), reviewed, one critical oversell bug fixed on top.** T-006 (policy
-engine) is unblocked. T-005a queued and must land before T-009.
+**Phase 3 safety core complete.** T-005 is reviewed and concurrency-safe; T-006 supplies the
+deterministic gates that T-007 will attach before every agent-driven commerce mutation. T-005a
+remains required before T-009.
 
 ---
 
@@ -21,8 +22,14 @@ engine) is unblocked. T-005a queued and must land before T-009.
   `_ensure_cart_is_editable()`, so a concurrent `create_order` serialises on the cart row
 - **Concurrent checkout of the last unit from two carts now yields exactly one order**
   (this was broken; see below)
+- All nine policy rules evaluate over typed facts rather than model text; denials include stable
+  rule IDs and user-safe remediation. Pre/post checks can persist their outcome into `agent_steps`
+- `POST /api/v1/cart/confirm` is the public confirmation minting path. Tokens are HMAC-signed,
+  cart-fingerprint-bound, expire after five minutes, and are stored hashed for single use
+- Invalid payment confirmation is an executable gate: forged, expired, or cart-mismatched tokens
+  deny `place_order` before the guarded payment callable can execute
 - Hybrid catalog search with hard filters incl. arch support; isolated test DB; coherent catalog
-- **Verified green:** 27 pytest, `mypy --strict app`, ruff, eslint, tsc
+- **Verified green:** 40 pytest, `mypy --strict app`, ruff, eslint, tsc, OpenAPI codegen
 
 ---
 
@@ -91,16 +98,16 @@ agent being *stopped by deterministic policy* is what makes this read as enginee
 
 ## Next priorities
 
-1. **T-006** policy engine — Codex
+1. **T-007** tool registry + agent orchestrator + SSE — Codex
 2. **Aryan**: obtain Razorpay test-mode credentials and an LLM API key before Phase 3 ends
 
-**Claude's next action:** review T-005's cart-lock/reservation lifecycle and transaction boundary,
-then direct T-006.
+**Claude's next action:** review the policy rule ordering, confirmation-token validation, and the
+payment execution gate before directing T-007.
 
 ---
 
 ## Demo readiness
 
-**4 / 10.** The foundation, coherent catalog, retrieval tool, and deterministic commerce layer
-are working. The policy layer, agent, customer experience, and Razorpay flow remain. The realistic
-path to a credible 5-minute demo is T-006→T-009, then T-010→T-013.
+**5 / 10.** The foundation, coherent catalog, retrieval tool, commerce layer, and deterministic
+policy core are working. The agent, customer experience, Razorpay flow, and reporting remain. The
+realistic path to a credible 5-minute demo is T-007→T-009, then T-010→T-013.

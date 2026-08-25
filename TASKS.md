@@ -392,7 +392,7 @@ T-009 builds payment reconciliation on top of the current shape.
 
 ---
 
-### `[ ]` T-006 — Policy engine
+### `[x]` T-006 — Policy engine
 **Objective.** Implement all 9 rules in `ARCHITECTURE.md` §7 as pure functions with `rule_id`s.
 **Files.** `api/app/policy/{decisions.py,rules.py,engine.py}`, `api/tests/test_policy.py`.
 **Details.** `pre_tool` / `post_tool`; every decision persisted; confirmation tokens minted only
@@ -400,6 +400,11 @@ by `POST /api/v1/cart/confirm` from an explicit user action (D-008).
 **Acceptance.** One test per `rule_id`, each proving the *deny* path. Specifically: a forged /
 expired / cart-mismatched token is rejected; a model-supplied `discount_paise` is ignored in
 favour of the recomputed value; `place_order` with any invalid token cannot reach Razorpay.
+
+Completed 2026-08-25 — all nine deterministic rules are pure functions with stable rule IDs;
+pre/post evaluation and audit persistence are ready for T-007. The explicit user-only cart
+confirmation endpoint mints signed, cart-bound, single-use tokens. 40 isolated tests, strict
+mypy, ruff, TypeScript, ESLint, and OpenAPI generation pass.
 
 ### `[ ]` T-007 — Tool registry + agent orchestrator + SSE
 **Objective.** The bounded tool-use loop. ~120 defensible lines, no agent framework (D-006).

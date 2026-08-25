@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cart import router as cart_router
 from app.api.catalog import router as catalog_router
 from app.catalog.search import refresh_catalog_embeddings
 from app.config import get_settings
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
     )
+    application.include_router(cart_router)
     application.include_router(catalog_router)
 
     @application.get("/api/v1/health", tags=["health"])
