@@ -119,7 +119,11 @@ async def validate_confirmation_token(
     secret: str,
     now: datetime | None = None,
 ) -> ConfirmationValidation:
-    """Validate without consuming; payment code consumes only after it begins the action."""
+    """Validate without consuming.
+
+    Consumption happens in `policy.engine.execute_if_allowed`, atomically with the action,
+    so validation and use cannot drift apart (D-008).
+    """
     if not token:
         return ConfirmationValidation(False, False, True)
     issued_at = now or _now()
@@ -168,6 +172,12 @@ async def consume_confirmation_token(
         select(ConfirmationToken)
         .where(ConfirmationToken.token_hash == _token_hash(token))
         .with_for_update()
+        # Defensive, by analogy with the oversell fixed in commerce/inventory.py: validate()
+        # has already loaded this row, and we must not decide single-use from a pre-lock copy.
+        # Unlike the inventory case this was NOT reproducible here -- an ablation with a
+        # barrier forcing both requests to validate before either consumes passed either way.
+        # Kept because reading locked rows fresh is the property we want to depend on.
+        .execution_options(populate_existing=True)
     )
     issued_at = now or _now()
     if token_row is None or token_row.used_at is not None or token_row.expires_at <= issued_at:

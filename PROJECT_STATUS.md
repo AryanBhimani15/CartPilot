@@ -7,29 +7,22 @@
 
 ## Current phase
 
-**Phase 3 safety core complete.** T-005 is reviewed and concurrency-safe; T-006 supplies the
-deterministic gates that T-007 will attach before every agent-driven commerce mutation. T-005a
-remains required before T-009.
+**T-006 merged (`07fe4d4`), reviewed, two defects fixed on top.** T-007 (agent orchestrator) is
+unblocked. T-005a still required before T-009.
 
 ---
 
 ## What works
 
-- Cart price snapshots, database-only offer recalculation, canonical cart fingerprints
-- Reservation lifecycle: reserve at order creation, release on failure, decrement on capture
-- DB `CHECK` constraints reject invalid stock/reservation states
-- **Cart-lock ordering is correct** — all three mutation paths take `_locked_cart()` before
-  `_ensure_cart_is_editable()`, so a concurrent `create_order` serialises on the cart row
-- **Concurrent checkout of the last unit from two carts now yields exactly one order**
-  (this was broken; see below)
-- All nine policy rules evaluate over typed facts rather than model text; denials include stable
-  rule IDs and user-safe remediation. Pre/post checks can persist their outcome into `agent_steps`
-- `POST /api/v1/cart/confirm` is the public confirmation minting path. Tokens are HMAC-signed,
-  cart-fingerprint-bound, expire after five minutes, and are stored hashed for single use
-- Invalid payment confirmation is an executable gate: forged, expired, or cart-mismatched tokens
-  deny `place_order` before the guarded payment callable can execute
-- Hybrid catalog search with hard filters incl. arch support; isolated test DB; coherent catalog
-- **Verified green:** 40 pytest, `mypy --strict app`, ruff, eslint, tsc, OpenAPI codegen
+- Nine policy rules with stable IDs, first-deny-wins, each with a failure-path test
+- HMAC-signed, hashed-at-rest, expiring confirmation tokens bound to session + action + cart
+  fingerprint; minted only by `POST /api/v1/cart/confirm`
+- **Confirmation tokens are now genuinely single use** — the execution gate consumes them
+  atomically with the action (this was missing; see below)
+- Forged, expired and cart-mismatched tokens deny payment and the guarded action does not run
+- Policy decisions persisted to `agent_steps`, one row per step, updated rather than duplicated
+- Concurrency-safe commerce layer; hybrid search with hard filters; coherent 140-SKU catalog
+- **Verified green:** 44 pytest, `mypy --strict app`, ruff, eslint, tsc
 
 ---
 
@@ -37,28 +30,32 @@ remains required before T-009.
 
 | # | Finding | Severity | State |
 |---|---|---|---|
-| 1 | **Oversell under concurrent checkout.** `reserve_stock()` takes `SELECT … FOR UPDATE`, but `_cart_lines()` had already loaded those variants into the session's identity map earlier in `create_order()`. Without `populate_existing=True` SQLAlchemy returned the cached **pre-lock** instance, so `reserved_qty` was read stale and the row lock protected nothing. Two concurrent checkouts both succeeded on `stock_qty=1`. | Critical — sells inventory that does not exist | **Fixed by Claude** |
-| 2 | The shipped concurrency test exercised concurrent `add_to_cart` on one cart. Carts deliberately don't reserve inventory, so that path never reaches `reserve_stock()` — the oversell risk lives entirely at order creation and was untested. | High — masked #1 | **Fixed by Claude** (new test) |
-| 3 | `capture_order_stock()` / `release_order_reservation()` never verified `order.cart_fingerprint` before moving stock, though the field exists precisely to detect that drift. | Medium | **Fixed by Claude** (tripwire) |
-| 4 | **No `order_items` table.** Orders re-derive their contents from the mutable cart. Not exploitable today thanks to the cart lock, but the invariant lives in convention across two modules — and it blocks T-010 product-level analytics entirely. | High — blocks T-010, must precede T-009 | **T-005a** |
+| 1 | **Single use did not exist.** `consume_confirmation_token()` was never called anywhere, and the execution gate validated without consuming — so one confirmation authorised unlimited payment executions. This is the exact property D-008 exists to provide. | Critical | **Fixed by Claude** — gate now consumes atomically |
+| 2 | **`PolicyContext` is fail-open by omission.** Every field defaults permissively, so a tool adapter that forgets one silently disables the rule reading it. | High — and T-007 writes all these adapters | **Fixed by Claude** (`REQUIRED_FACTS`) + T-007 acceptance criteria |
+| 3 | The gate keys off tool *name* (`PAYMENT_TOOLS`). A renamed or newly added payment tool silently loses its confirmation requirement. | Medium | T-007 acceptance: assert the set matches the registry |
+| 4 | No `order_items` table — orders re-derive contents from the mutable cart; blocks T-010 product analytics | High | **T-005a**, before T-009 |
 | 5 | Semantic retrieval arm untested | Medium | T-004a |
-| 6 | `_locked_variants` relies on `ORDER BY id` for lock ordering; safe with a PK index scan, theoretically not if Postgres chooses seq-scan + sort | Low | Note only |
-| 7 | Generated rows inherit archetype titles; global SKU uniqueness; `NullPool` on the API server | Low | T-014 |
+| 6 | Archetype titles, global SKU uniqueness, `NullPool` on the API server | Low | T-014 |
 
-**Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed before T-007/T-009.
+**Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed now for T-007.
 
 ---
 
 ## What Claude changed in this pass
 
-- `api/app/commerce/inventory.py` — `populate_existing=True` on the locked select, so
-  `FOR UPDATE` reads post-lock values instead of the identity map's stale copy
-- `api/tests/test_commerce.py` — new test driving two real concurrent `create_order()` calls on
-  separate connections for one unit of stock. **Verified deterministic**: fails 3/3 without the
-  fix, passes 3/3 with it
-- `api/app/commerce/orders.py` — `_assert_cart_still_matches_order()`; capture and release now
-  verify the fingerprint before moving stock
-- `TASKS.md` — T-005a (order line items), sequenced before T-009
+- `api/app/policy/engine.py` — `execute_if_allowed` consumes the confirmation token for payment
+  tools, in the same transaction as the action; a payment tool without a consumable token is denied
+- `api/app/policy/rules.py` — `REQUIRED_FACTS` rule, ordered **last** so specific denials still win
+- `api/app/policy/confirmation.py` — `populate_existing=True` on consume (defensive; see note),
+  corrected a docstring that described the old consumption boundary
+- `api/tests/test_policy.py` — four tests: token is single use; a valid token cannot be replayed
+  through the gate; a payment tool with no stated total is denied; two concurrent requests cannot
+  both consume one token (with a barrier forcing genuine overlap)
+
+**Reported honestly:** the `populate_existing` hardening on token consume is defensive by analogy
+with the T-005 oversell. Unlike that case it was **not** reproducible here — ablation passed with
+and without it. It is kept because reading locked rows fresh is a property worth depending on,
+not because it fixed a demonstrated bug.
 
 ## Recent decisions
 

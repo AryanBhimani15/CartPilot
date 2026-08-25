@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import asyncio
+import uuid
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.commerce.cart import add_to_cart, create_cart
-from app.db.models import AgentStep, Cart, Product, ProductVariant, Session
+from app.db.models import (
+    AgentStep,
+    Cart,
+    ConfirmationToken,
+    Merchant,
+    Product,
+    ProductVariant,
+    Session,
+)
 from app.db.seed.catalog import MERCHANT_ID
-from app.domain.enums import PolicyDecision, SessionOutcome
+from app.db.session import get_session_factory
+from app.domain.enums import PolicyDecision, SessionOutcome, VariantAxis
 from app.policy.confirmation import (
     _now,
+    consume_confirmation_token,
     mint_confirmation_token,
     validate_confirmation_token,
 )
-from app.policy.decisions import Deny, RequireConfirmation
+from app.policy.decisions import Allow, Deny, RequireConfirmation
 from app.policy.engine import (
     PolicyAudit,
     evaluate_post_tool,
@@ -24,6 +36,8 @@ from app.policy.engine import (
     persist_decision,
 )
 from app.policy.rules import PolicyContext
+
+SECRET = "policy-test-secret"
 
 
 def deny(context: PolicyContext, rule_id: str) -> Deny:
@@ -227,3 +241,163 @@ async def test_policy_decisions_are_persisted_and_post_checks_reapply_rules(
     assert recorded is not None
     assert recorded.policy_decision == PolicyDecision.DENY
     assert recorded.policy_rule_id == "BUDGET_CEILING"
+
+
+@pytest.mark.asyncio
+async def test_confirmation_token_is_single_use(seeded_catalog: AsyncSession) -> None:
+    """D-008 requires single use. Validation alone does not deliver it."""
+    cart, _ = await _cart_with_item(seeded_catalog)
+    minted = await mint_confirmation_token(
+        seeded_catalog, cart=cart, action="place_order", secret=SECRET
+    )
+
+    first = await consume_confirmation_token(seeded_catalog, token=minted.token)
+    second = await consume_confirmation_token(seeded_catalog, token=minted.token)
+    assert first is True
+    assert second is False, "a consumed confirmation token was accepted a second time"
+
+
+@pytest.mark.asyncio
+async def test_valid_token_cannot_be_replayed_through_the_execution_gate(
+    seeded_catalog: AsyncSession,
+) -> None:
+    """The gate must consume the token itself.
+
+    If consumption is left to downstream payment code, a single confirmation authorises an
+    unbounded number of payment executions -- the exact property D-008 exists to prevent.
+    """
+    cart, _ = await _cart_with_item(seeded_catalog)
+    minted = await mint_confirmation_token(
+        seeded_catalog, cart=cart, action="place_order", secret=SECRET
+    )
+    validation = await validate_confirmation_token(
+        seeded_catalog, cart=cart, action="place_order", token=minted.token, secret=SECRET
+    )
+    assert validation.valid
+
+    context = PolicyContext(
+        "place_order",
+        proposed_total_paise=cart.total_paise,
+        confirmation_supplied=True,
+        confirmation_valid=True,
+        confirmation_cart_matches=True,
+    )
+    executions: list[int] = []
+
+    async def charge() -> int:
+        executions.append(1)
+        return len(executions)
+
+    first_decision, _ = await execute_if_allowed(
+        context, charge, session=seeded_catalog, confirmation_token=minted.token
+    )
+    second_decision, _ = await execute_if_allowed(
+        context, charge, session=seeded_catalog, confirmation_token=minted.token
+    )
+
+    assert isinstance(first_decision, Allow)
+    assert isinstance(second_decision, Deny)
+    assert second_decision.rule_id == "CONFIRM_BEFORE_PAY"
+    assert len(executions) == 1, "one confirmation authorised more than one payment execution"
+
+
+def test_payment_tool_without_a_stated_total_is_denied_not_allowed() -> None:
+    """Every PolicyContext field defaults permissively, which is fail-open for money tools."""
+    result = evaluate_pre_tool(
+        PolicyContext(
+            "create_razorpay_order",
+            confirmation_supplied=True,
+            confirmation_valid=True,
+        )
+    )
+    assert isinstance(result, Deny)
+    assert result.rule_id == "REQUIRED_FACTS"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_cannot_both_consume_one_token() -> None:
+    """Two in-flight place_order requests sharing a token must not both authorise payment."""
+    merchant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    product_id = uuid.uuid4()
+    variant_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    token = ""
+
+    async with session_factory() as setup:
+        async with setup.begin():
+            setup.add(Merchant(id=merchant_id, name=f"Token Merchant {merchant_id}"))
+            setup.add(
+                Session(id=session_id, merchant_id=merchant_id, outcome=SessionOutcome.ACTIVE)
+            )
+            setup.add(
+                Product(
+                    id=product_id,
+                    merchant_id=merchant_id,
+                    sku=f"TOKEN-{product_id}",
+                    title="Token Runner",
+                    brand="Test Brand",
+                    category="running_shoes",
+                    subcategory="test",
+                    price_paise=100_000,
+                    description="Test product",
+                    attrs={"use_case": "daily_easy_runs", "gender": "unisex"},
+                )
+            )
+            setup.add(
+                ProductVariant(
+                    id=variant_id,
+                    product_id=product_id,
+                    sku=f"TOKEN-VARIANT-{variant_id}",
+                    axis=VariantAxis.FOOTWEAR_SIZE,
+                    size="UK 9",
+                    colour="Black",
+                    stock_qty=5,
+                    reserved_qty=0,
+                )
+            )
+            await setup.flush()
+            cart = await create_cart(setup, session_id, merchant_id)
+            await add_to_cart(setup, cart.id, variant_id, 1)
+            minted = await mint_confirmation_token(
+                setup, cart=cart, action="place_order", secret=SECRET
+            )
+            token = minted.token
+
+    # Both requests must finish validating BEFORE either consumes. Otherwise the second task
+    # simply runs after the first has committed, never contends for the lock, and the test
+    # proves nothing about concurrent consumption.
+    validated = asyncio.Barrier(2)
+
+    async def consume() -> bool:
+        async with session_factory() as request_session:
+            async with request_session.begin():
+                request_cart = await request_session.scalar(
+                    select(Cart).where(Cart.session_id == session_id)
+                )
+                assert request_cart is not None
+                await validate_confirmation_token(
+                    request_session,
+                    cart=request_cart,
+                    action="place_order",
+                    token=token,
+                    secret=SECRET,
+                )
+                await validated.wait()
+                return await consume_confirmation_token(request_session, token=token)
+
+    tasks = [asyncio.create_task(consume()) for _ in range(2)]
+    results = await asyncio.gather(*tasks)
+
+    try:
+        assert sorted(results) == [False, True], "one token was consumed twice"
+    finally:
+        async with session_factory() as cleanup:
+            async with cleanup.begin():
+                await cleanup.execute(
+                    delete(ConfirmationToken).where(ConfirmationToken.session_id == session_id)
+                )
+                await cleanup.execute(delete(Cart).where(Cart.session_id == session_id))
+                await cleanup.execute(delete(Product).where(Product.id == product_id))
+                await cleanup.execute(delete(Session).where(Session.id == session_id))
+                await cleanup.execute(delete(Merchant).where(Merchant.id == merchant_id))

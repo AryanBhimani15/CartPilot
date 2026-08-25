@@ -406,12 +406,48 @@ pre/post evaluation and audit persistence are ready for T-007. The explicit user
 confirmation endpoint mints signed, cart-bound, single-use tokens. 40 isolated tests, strict
 mypy, ruff, TypeScript, ESLint, and OpenAPI generation pass.
 
+**Reviewed 2026-08-25 (Claude).** Rule ordering is **correct**: existence → availability →
+discount integrity → limits → drift → substitution → fingerprint binding → confirmation, with
+first-deny-wins. `cart_fingerprint_matches` deliberately precedes `confirm_before_pay` so a stale
+token reports `CART_FINGERPRINT` rather than a generic confirmation error. Tokens are HMAC-signed,
+compared with `hmac.compare_digest`, stored hashed, bound to session + action + cart fingerprint,
+and expiring. All good.
+
+Two defects fixed:
+
+1. **Single use did not exist.** `consume_confirmation_token()` was never called — not in
+   application code, not in tests — and `execute_if_allowed()` validated without consuming. One
+   confirmation therefore authorised an unbounded number of payment executions, which is the
+   precise property D-008 exists to provide. The gate now consumes the token itself, in the same
+   transaction as the action, so validation and use cannot drift apart and T-007/T-009 cannot
+   forget. A payment tool reaching the gate without a consumable token is denied.
+
+2. **`PolicyContext` is fail-open by omission.** Every field defaults permissively
+   (`product_exists=True`, `price_snapshot_matches=True`, `session_budget_paise=None`), so a tool
+   adapter that forgets to populate one silently disables the rule that reads it. Added
+   `REQUIRED_FACTS`, which denies a payment tool whose context never stated a total. It runs
+   **last**, so a more specific denial above it is still the reported answer.
+
+Also hardened `consume_confirmation_token()` with `populate_existing=True` by analogy with the
+T-005 oversell. Stated honestly: unlike that case, this was **not** reproducible — an ablation
+with a barrier forcing both requests to validate before either consumes passed with and without it.
+
+---
+
 ### `[ ]` T-007 — Tool registry + agent orchestrator + SSE
 **Objective.** The bounded tool-use loop. ~120 defensible lines, no agent framework (D-006).
 **Files.** `api/app/agent/**`, `api/app/api/chat.py`, `api/tests/test_orchestrator.py`.
 **Details.** All 12 tools; Pydantic in/out; envelope shape from §6; `max_steps=8`,
 30s wall clock, 2 consecutive errors; one `agent_steps` row per iteration written *before*
 returning to the model; SSE event types per §12.
+**Additional acceptance from the T-006 review (fail-open risk).**
+- Every write tool must route its side effect through `policy.engine.execute_if_allowed`. A test
+  asserts no commerce or payment mutation is reachable from a tool handler that bypasses the gate.
+- A test asserts `PAYMENT_TOOLS` equals the set of payment tools in the registry. Today the gate
+  keys off tool *name*; a renamed or newly added payment tool would silently lose confirmation.
+- For each tool, a test asserts the adapter populates every `PolicyContext` field the rules for
+  that tool actually read — omission is currently indistinguishable from "allowed".
+
 **Acceptance.** Integration test with `StubLLMProvider` drives the full demo path end to end
 with no network. A tool raising an exception yields a clean `ok:false` envelope — never a 500,
 never a stack trace to the client. A model loop that never terminates is cut off at 8 steps

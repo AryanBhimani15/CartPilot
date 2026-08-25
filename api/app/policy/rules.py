@@ -32,6 +32,25 @@ class PolicyContext:
     substitution_confirmed: bool = False
 
 
+def payment_facts_present(context: PolicyContext) -> PolicyResult:
+    """Deny a payment tool whose context omits the facts the money rules depend on.
+
+    Every PolicyContext field defaults to a permissive value, so a tool adapter that forgets
+    to populate one silently disables the rule that reads it. That is fail-open in the one
+    place it must never be. Payment tools must state their total explicitly.
+    """
+    if context.tool_name not in PAYMENT_TOOLS:
+        return Allow()
+    if context.proposed_total_paise is None:
+        return Deny(
+            "REQUIRED_FACTS",
+            "POLICY_FACTS_MISSING",
+            "This payment could not be checked against the cart total.",
+            "Recompute the cart total and retry the confirmed checkout.",
+        )
+    return Allow()
+
+
 def budget_ceiling(context: PolicyContext) -> PolicyResult:
     if (
         context.session_budget_paise is not None
@@ -159,4 +178,7 @@ RULES = (
     no_silent_substitution,
     cart_fingerprint_matches,
     confirm_before_pay,
+    # Last: a specific denial above is always the more useful answer. This only fires when
+    # every other rule allowed, catching a payment whose context never stated a total.
+    payment_facts_present,
 )

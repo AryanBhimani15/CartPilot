@@ -10,8 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AgentStep, Session
 from app.domain.enums import PolicyDecision
+from app.policy.confirmation import consume_confirmation_token
 from app.policy.decisions import Allow, Deny, PolicyResult, RequireConfirmation, decision_payload
-from app.policy.rules import RULES, PolicyContext
+from app.policy.rules import PAYMENT_TOOLS, RULES, PolicyContext
 
 T = TypeVar("T")
 
@@ -36,17 +37,41 @@ evaluate_post_tool = post_tool
 
 
 async def execute_if_allowed(
-    context: PolicyContext, action: Callable[[], Awaitable[T]]
+    context: PolicyContext,
+    action: Callable[[], Awaitable[T]],
+    *,
+    session: AsyncSession | None = None,
+    confirmation_token: str | None = None,
 ) -> tuple[PolicyResult, T | None]:
     """Prevent a denied tool from reaching its payment or commerce side effect.
 
-    T-009 will pass its Razorpay action through this gate. Keeping it here makes the safety
-    boundary executable and directly testable before a payment client exists.
+    For payment tools the gate **consumes** the confirmation token itself, in the same
+    transaction as the action. Validation alone is not single use: leaving consumption to
+    downstream payment code means one confirmation can authorise an unbounded number of
+    executions, which is the precise property D-008 exists to prevent. Doing it here also
+    closes the validate-then-act window, and makes it impossible for T-007 or T-009 to
+    forget. A payment tool reaching this gate without a consumable token is denied.
     """
     decision = pre_tool(context)
     if not isinstance(decision, Allow):
         return decision, None
+    if context.tool_name in PAYMENT_TOOLS:
+        if session is None or not confirmation_token:
+            return _confirmation_denied("The payment confirmation was never presented."), None
+        if not await consume_confirmation_token(session, token=confirmation_token):
+            return _confirmation_denied(
+                "The payment confirmation is invalid, expired, or already used."
+            ), None
     return decision, await action()
+
+
+def _confirmation_denied(message: str) -> Deny:
+    return Deny(
+        "CONFIRM_BEFORE_PAY",
+        "CONFIRMATION_INVALID",
+        message,
+        "Review the cart and confirm it again.",
+    )
 
 
 def _policy_decision(result: PolicyResult) -> PolicyDecision:
