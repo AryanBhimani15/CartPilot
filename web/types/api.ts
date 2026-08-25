@@ -122,6 +122,7 @@ export interface operations {
                 size?: string | null;
                 brand?: string | null;
                 gender?: string | null;
+                arch_support?: string[] | null;
                 k?: number;
             };
             header?: never;

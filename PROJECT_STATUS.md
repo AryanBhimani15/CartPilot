@@ -7,30 +7,22 @@
 
 ## Current phase
 
-**Phase 2 retrieval complete.** T-003a/b/c remains reviewed, and T-004 now uses that coherent,
-category-aware catalog for hybrid retrieval.
+**Phase 2 complete and reviewed.** T-004 merged (`eae9de0`), reviewed, three defects fixed on top.
+T-005 (commerce services) is unblocked. One follow-up queued as T-004a.
 
 ---
 
 ## What works
 
-- Isolated test database: `make test` runs against `cartpilot_test`, rejects a dev/test URL
-  collision, rolls back DB-writing tests. **Verified**: dev `products` count and `max(updated_at)`
-  are byte-identical across two consecutive runs
-- Category-aware variants: 140 products / 703 variants. **Verified**: zero non-footwear UK-size
-  variants, footwear attrs nested under `attrs.footwear`, and the GPS-watch search document
-  contains no footwear vocabulary
-- Deterministic seed with declared stockouts and guaranteed demo-path stock
-- Full typed schema, Alembic migrations, enum + variant-axis lifecycle verified over repeat cycles
-- `GET /api/v1/health` real Postgres round-trip; `/shop` and `/dashboard` render
-- Hybrid catalog retrieval at `GET /api/v1/catalog/products/search`: budget, category, stock,
-  size, brand, and gender are hard SQL filters; semantic and Postgres lexical signals are fused
-  with RRF; results expose factual `match_reasons` and a score audit trail
-- Product embeddings are category-aware, content-hash cached in `product_embeddings`, refreshed
-  by `make seed`, and loaded into the shared numpy index when the API starts. Tests force the
-  deterministic provider, so they need neither network nor an API key
-- **Verified green:** 18 pytest, `mypy --strict app`, ruff, generated OpenAPI types, eslint, tsc;
-  API startup plus live health and `GPS watch` hybrid-search requests verified locally
+- Hybrid catalog search: hard SQL constraints → semantic + lexical → RRF → transparent business
+  re-rank, with a per-hit `score_breakdown` for the audit trail
+- **Arch support is now a hard filter** — the flagship demo query returns 8/8 stability or
+  motion-control shoes, all in budget, all in stock (was 6/8 neutral)
+- `match_reasons` computed from filters and catalog rows, never model-authored (D-012)
+- Embedding cache keyed on content hash; seed-time refresh; numpy index preloaded at startup
+- Isolated test database; dev DB provably unchanged across runs
+- 140 products / 703 variants, coherent prose, declared stockouts
+- **Verified green:** 20 pytest, `mypy --strict app`, ruff, eslint, tsc, OpenAPI codegen
 
 ---
 
@@ -38,27 +30,32 @@ category-aware catalog for hybrid retrieval.
 
 | # | Finding | Severity | State |
 |---|---|---|---|
-| 1 | Catalog expansion reassigned `arch_support`/`terrain`/`cushioning` per row but inherited the archetype's description, so **36 of 59 running shoes had prose contradicting their own attributes** (`VAYU-CONTROL-1-E10`: "for runners needing motion control", `arch_support: neutral`). Would have poisoned T-004 embeddings and put visible contradictions on demo product cards. | High — would have corrupted Phase 2 | **Fixed by Claude** |
-| 2 | Price floors were applied with `max()`, collapsing rows onto identical values — 23 distinct prices across 59 shoes, 4 at exactly ₹3,500. Makes budget-boundary behaviour look artificial. | Medium | **Fixed by Claude** |
-| 3 | Generated rows inherit the archetype *title* ("Cloudline 5 Series 5" on a stability shoe). Model names assert nothing about fit, so cosmetic only. | Low | T-014 polish |
-| 4 | `products.sku` / `offers.code` globally unique rather than per-merchant | Low | Accept; revisit if a second merchant appears |
-| 5 | `NullPool` applies to the API server, not just CLI/pytest | Low | T-014 |
-| 6 | No `CHECK` constraints on `stock_qty >= 0` / `reserved_qty <= stock_qty` | Low | Fold into T-005 |
-| 7 | `VECTOR_BACKEND=pgvector` is intentionally fail-fast until deployed against a pgvector-enabled database; local Postgres 14 remains numpy-only per D-003/D-004 | Low | Review deployment implementation when scaling beyond the demo catalog |
+| 1 | `DeterministicEmbeddingProvider` hardcoded shopper-phrase → catalog-vocabulary mappings (`flat feet` → `stability, motion_control`). This provider is the **default for `make eval`** (D-005), so it would have manufactured CartPilot's relevance advantage in T-012 and reported it as semantic retrieval. | Critical — fabricated metric | **Fixed by Claude** |
+| 2 | Arch support was a soft ranking signal: 6 of the top 8 hits on the flagship demo query were neutral shoes. The test asserted only `>= 2` non-neutral, calibrated to what the system produced rather than to a correct result. | High — wrong demo output | **Fixed by Claude** (D-013) |
+| 3 | N+1 queries: one `SELECT` per candidate for sizes, 141 round-trips per unfiltered search, in the hot path of every agent tool call. | Medium | **Fixed by Claude** |
+| 4 | The semantic arm is **untested**. All 18 T-004 tests passed with the domain mapping deleted, and lexical scores 0 on the flagship query — so the suite exercises filters and lexical only. | Medium | **T-004a** |
+| 5 | Generated rows inherit archetype titles ("Cloudline 5 Series 5" on a stability shoe) | Low | T-014 |
+| 6 | `products.sku` / `offers.code` globally unique rather than per-merchant | Low | Accept |
+| 7 | `NullPool` on the API server, not just CLI/pytest | Low | T-014 |
+| 8 | No `CHECK` on `stock_qty >= 0` / `reserved_qty <= stock_qty` | Low | Fold into T-005 |
 
 **Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed before T-007/T-009.
+An `EMBEDDING_API_KEY` is also needed to demo real semantic quality (D-014).
 
 ---
 
 ## What Claude changed in this pass
 
-- `api/app/db/seed/catalog.py` — generated running-shoe descriptions are composed from the
-  attributes actually assigned to the row (`running_shoe_description()`); `spread_price()`
-  replaces floor clamps so prices don't pile up
-- `api/tests/test_seed_catalog.py` — three regression tests: prose never contradicts attributes,
-  prices are not clustered on a floor, and the motion-control demand gap is preserved
-- Result: contradictions 36 → **0**; distinct running-shoe prices 23 → **56**; demand gap intact
-  (cheapest motion-control shoe ₹3,631)
+- `api/app/catalog/embeddings.py` — removed the query→catalog vocabulary injection; `_tokens` is
+  now domain-agnostic
+- `api/app/catalog/search.py` — `SearchFilters.arch_support` as a hard SQL filter (D-013);
+  `match_reasons` follows the filter rather than a substring of the query; N+1 size lookup
+  replaced with one grouped query
+- `api/app/api/catalog.py` — endpoint exposes `arch_support`; OpenAPI + `web/types/api.ts` regenerated
+- `api/tests/test_search.py` — flat-feet test now asserts **all** hits satisfy arch support;
+  new test blocks reintroduction of the synonym table; new test proves neutral shoes are excluded
+- `DECISIONS.md` — D-013 (hard filters for constraint-bearing intent), D-014 (two AI vendors),
+  D-015 (keep the pgvector fail-fast adapter)
 
 ## Recent decisions
 

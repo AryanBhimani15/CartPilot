@@ -269,6 +269,25 @@
           },
           {
             "in": "query",
+            "name": "arch_support",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Arch Support"
+            }
+          },
+          {
+            "in": "query",
             "name": "k",
             "required": false,
             "schema": {

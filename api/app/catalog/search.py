@@ -27,6 +27,9 @@ class SearchFilters:
     size: str | None = None
     brand: str | None = None
     gender: str | None = None
+    # Arch support is a hard requirement, not a preference. A shopper with flat feet must
+    # never be ranked into neutral shoes because a description happened to score well.
+    arch_support: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.max_price_paise is not None and self.max_price_paise < 0:
@@ -164,25 +167,40 @@ class CatalogSearchService:
             statement = statement.where(Product.brand == filters.brand)
         if filters.gender is not None:
             statement = statement.where(Product.attrs["gender"].as_string() == filters.gender)
+        if filters.arch_support is not None:
+            statement = statement.where(
+                Product.attrs["footwear"]["arch_support"].as_string().in_(filters.arch_support)
+            )
         if filters.in_stock:
             statement = statement.where(in_stock)
         statement = statement.order_by(Product.sku)
 
-        candidates: list[_Candidate] = []
-        for product, available in (await self._session.execute(statement)).all():
-            sizes = (
-                await self._session.scalars(
-                    select(ProductVariant.size)
-                    .where(
-                        ProductVariant.product_id == product.id,
-                        ProductVariant.stock_qty > ProductVariant.reserved_qty,
-                    )
-                    .order_by(ProductVariant.size)
+        rows = (await self._session.execute(statement)).all()
+        if not rows:
+            return []
+
+        # One query for every candidate's sizes. Previously this was a SELECT per candidate,
+        # which is 141 round-trips on an unfiltered search — in the hot path of every agent
+        # tool call.
+        product_ids = [product.id for product, _ in rows]
+        size_rows = (
+            await self._session.execute(
+                select(ProductVariant.product_id, ProductVariant.size)
+                .where(
+                    ProductVariant.product_id.in_(product_ids),
+                    ProductVariant.stock_qty > ProductVariant.reserved_qty,
                 )
-            ).all()
-            candidates.append(
-                _Candidate(product, bool(available), tuple(sizes)))
-        return candidates
+                .order_by(ProductVariant.product_id, ProductVariant.size)
+            )
+        ).all()
+        sizes_by_product: dict[uuid.UUID, list[str]] = {}
+        for product_id, size in size_rows:
+            sizes_by_product.setdefault(product_id, []).append(size)
+
+        return [
+            _Candidate(product, bool(available), tuple(sizes_by_product.get(product.id, ())))
+            for product, available in rows
+        ]
 
     async def search_products(
         self, query: str, filters: SearchFilters | None = None, k: int = 8
@@ -288,7 +306,9 @@ class CatalogSearchService:
         footwear = product.attrs.get("footwear")
         if isinstance(footwear, Mapping):
             support = footwear.get("arch_support")
-            if "flat feet" in query_lower and support in {"stability", "motion_control"}:
+            if filters.arch_support is not None and support in filters.arch_support:
+                reasons.append(f"{str(support).replace('_', ' ').capitalize()} support as required")
+            elif "flat feet" in query_lower and support in {"stability", "motion_control"}:
                 reasons.append("Supportive build for flat feet")
             if "daily" in query_lower and product.attrs.get("use_case") == "daily_easy_runs":
                 reasons.append("Built for daily easy runs")

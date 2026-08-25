@@ -256,6 +256,60 @@ strict mypy, ruff, generated OpenAPI types, TypeScript, and ESLint pass.
 
 ---
 
+---
+
+### `[ ]` T-004a — Prove the semantic arm does something, and label eval provenance
+**Objective.** Close the one gap left by the T-004 review: nothing currently tests semantic ranking.
+
+**Files.** `api/tests/test_search.py`, `api/tests/conftest.py`, `eval/` (when T-012 lands),
+`api/app/catalog/embeddings.py`.
+
+**Problem found in review.** All 18 T-004 tests passed with the deterministic provider's domain
+mapping deleted, and on the flagship demo query the lexical arm scores **0 for every hit**
+(`websearch_to_tsquery` ANDs the terms and matches nothing). So the shipped tests exercise hard
+filters and the lexical path only — the semantic half of "hybrid" is unverified. The synonym
+table masked this, because it made the deterministic provider behave like it understood intent.
+
+**Details.**
+- Add an **ablation test**: run a query with the semantic arm suppressed and again with it active,
+  and assert the ranking actually differs. A hybrid retriever whose ranking is identical with one
+  arm disabled is not a hybrid retriever. Do the same for the lexical arm on a query where it
+  should dominate (`"Pace GPS One"` — an exact model name, where embeddings are weakest).
+- Add semantic-quality tests gated on the **real** provider: `@pytest.mark.skipif` on a missing
+  `EMBEDDING_API_KEY`, asserting that paraphrases which share no tokens with the product document
+  still retrieve it (e.g. "shoes that stop my ankles rolling inward" → stability shoes). These are
+  the only tests that can honestly assert semantic behaviour.
+- `make eval` must record `embedding_provider` in the results JSON **and** the `/evaluation` page
+  must display it. A run under `deterministic` may not be presented as evidence of semantic
+  retrieval quality — state that limitation in the report body, next to the existing D-011 caveat.
+
+**Acceptance.**
+- An ablation test fails if either arm is removed from fusion.
+- Semantic-quality tests skip cleanly with no API key and pass with one.
+- The eval results schema requires `embedding_provider`; `/evaluation` renders it.
+- A test asserts that a `deterministic` eval run is labelled as not representative of semantic
+  quality wherever relevance metrics are shown.
+
+
+**Reviewed 2026-08-25 (Claude).** Architecture is right: filters resolve in SQL, RRF avoids
+score-scale coupling, `match_reasons` are computed from data (D-012), and the business re-rank is
+too small to defeat a filter. Three defects fixed directly:
+
+1. **`DeterministicEmbeddingProvider` hardcoded shopper-phrase → catalog-vocabulary mappings**
+   (`flat feet` → `stability, motion_control`). D-005 makes this provider the default for
+   `make eval`, so it would have manufactured CartPilot's relevance advantage in T-012 and
+   reported it as a semantic result. Removed; a regression test now blocks reintroduction.
+2. **Arch support was a soft ranking signal.** Measured on the flagship demo query, 6 of the top 8
+   hits were neutral shoes — the wrong answer for a flat-feet shopper — and the test asserted only
+   `>= 2` non-neutral, so it passed. Now a hard SQL filter (D-013); the test asserts *all* hits
+   satisfy it. Result: 0 neutral shoes in the top 8.
+3. **N+1 queries** — one `SELECT` per candidate for available sizes, 141 round-trips on an
+   unfiltered search, in the hot path of every agent tool call. Now a single grouped query.
+
+Remaining gap tracked as T-004a. Review questions answered in **D-013** (hard filters),
+**D-014** (two AI vendors) and **D-015** (keep the pgvector fail-fast adapter — do not implement
+it speculatively).
+
 ## PHASE 3 — AGENT
 
 ### `[ ]` T-005 — Commerce services + cart fingerprint

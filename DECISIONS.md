@@ -203,3 +203,63 @@ product facts in the system prompt are restricted to fields present in the tool 
 
 **Consequences.** Product claims are traceable to catalog rows. `NO_PHANTOM_SKU` covers the
 identity case; this covers the attribute case.
+
+---
+
+## D-013 — Intent that maps to a structured catalog fact is a hard filter, not an embedding concern
+**Accepted · 2026-08-25 · supersedes the retrieval sketch in D-004/§5 for constraint-bearing intent**
+
+**Context.** T-004 shipped with "flat feet" handled as a fuzzy similarity signal. Measured on the
+flagship demo query, the top 8 results contained **6 neutral shoes** — the exact wrong answer for
+that shopper. The test asserted only `>= 2` non-neutral hits, so it passed. Separately, the
+deterministic embedding provider had been given a hand-written mapping
+(`flat feet -> stability, motion_control`) to compensate, which made a synonym table look like
+semantic understanding.
+
+**Decision.** Any shopper phrase that resolves to a structured catalog fact becomes a **hard SQL
+filter**, never a ranking signal. `SearchFilters.arch_support` is the first of these. Extracting
+"flat feet" -> `("stability", "motion_control")` is the *agent's* job at T-007 (or an explicit
+intent parser), and it is auditable in `agent_steps`. Embeddings handle genuinely fuzzy matching
+over descriptive text — nothing that has a column.
+
+**Consequences.** A flat-feet shopper can no longer be ranked into a neutral shoe by any scoring
+accident. The interview answer sharpens: *"flat feet is a constraint, not a vibe."* Extraction
+errors move into the agent layer where they are visible in the audit trail, rather than being
+diffused into a similarity score. Every future constraint-bearing attribute (width, terrain,
+gender) follows this pattern.
+
+---
+
+## D-014 — Embeddings come from OpenAI while the agent runs on Claude
+**Accepted · 2026-08-25**
+
+**Context.** D-006 fixes the agent on Claude, which has no embeddings endpoint. T-004 pinned
+`text-embedding-3-small`, introducing a second AI vendor.
+
+**Decision.** Accept two vendors. `EmbeddingProvider` (D-005) already isolates the choice to one
+class, so this is a swap, not a coupling. The deterministic provider remains the default for
+tests and `make eval`.
+
+**Consequences.** A second API key to manage, and a second vendor to name in the README. In
+exchange, both roles use a first-class model for their job. Note for the demo: retrieval quality
+shown live depends on `EMBEDDING_PROVIDER=openai`; the deterministic provider is a floor, not a
+representative sample of production quality.
+
+---
+
+## D-015 — `PgVectorIndex` stays as an explicit fail-fast adapter
+**Accepted · 2026-08-25 · answers the T-004 review question**
+
+**Context.** T-004 shipped `PgVectorIndex` as a class whose constructor raises. Reasonable
+question: should a hosted deployment replace it with a real implementation?
+
+**Decision.** Keep the fail-fast adapter, and do **not** implement it speculatively. `numpy` is
+the correct backend for ~140 products (D-004), and the demo runs locally. The value of the class
+is that `VECTOR_BACKEND=pgvector` fails loudly instead of silently falling back to a different
+retrieval strategy — a silent fallback would mean the deployed system quietly retrieves
+differently from the one that was evaluated. Implement it only if the catalog grows past the
+point where exact search is cheap, which is not a state this project will reach.
+
+**Consequences.** No dead code pretending to work, no infra dependency, and the interface still
+proves the boundary exists. If asked in the interview, the honest answer is that brute force is
+optimal here and the adapter marks where that stops being true.

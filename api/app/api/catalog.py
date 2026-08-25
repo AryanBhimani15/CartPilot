@@ -80,6 +80,7 @@ async def search_products(
     size: str | None = None,
     brand: str | None = None,
     gender: str | None = None,
+    arch_support: list[str] | None = Query(default=None),
     k: int = Query(default=8, ge=1, le=40),
     service: CatalogSearchService = Depends(_search_service),
 ) -> list[SearchHitResponse]:
@@ -91,5 +92,6 @@ async def search_products(
         size=size,
         brand=brand,
         gender=gender,
+        arch_support=tuple(arch_support) if arch_support else None,
     )
     return [_response(hit) for hit in await service.search_products(q, filters, k)]

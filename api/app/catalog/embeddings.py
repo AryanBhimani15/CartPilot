@@ -23,19 +23,17 @@ class EmbeddingProvider(Protocol):
 
 
 def _tokens(text: str) -> list[str]:
-    normalised = text.lower().replace("5 km", "5km").replace("flat feet", "flat_feet")
-    tokens = TOKEN_PATTERN.findall(normalised)
-    # The deterministic provider is deliberately a modest semantic floor: it maps common
-    # shopper phrasing to the catalog's structured vocabulary without relying on a network.
-    if "flat_feet" in tokens:
-        tokens.extend(("stability", "motion_control"))
-    if "daily" in tokens or "5km" in tokens:
-        tokens.append("daily_easy_runs")
-    if "watch" in tokens:
-        tokens.append("gps_watches")
-    if "run" in tokens or "running" in tokens or "runs" in tokens:
-        tokens.append("running_shoes")
-    return tokens
+    """Domain-agnostic tokenisation.
+
+    This provider must contain NO mapping from shopper phrasing to catalog vocabulary.
+    An earlier version injected `flat feet -> stability, motion_control` (and similar) here,
+    which made a hand-written synonym table look like semantic understanding. That matters
+    beyond aesthetics: D-005 makes this the default provider for `make eval`, so those
+    mappings would have manufactured CartPilot's "recommendation relevance" advantage in
+    T-012 and reported it as a semantic result. Shopper intent that maps to a structured
+    catalog fact is a hard filter (see SearchFilters.arch_support), not an embedding trick.
+    """
+    return TOKEN_PATTERN.findall(text.lower())
 
 
 class DeterministicEmbeddingProvider:
