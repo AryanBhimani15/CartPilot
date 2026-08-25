@@ -221,7 +221,7 @@ cosmetic — fold into T-014 polish if it looks odd on a product card.
 
 ## PHASE 2 — PRODUCT INTELLIGENCE
 
-### `[ ]` T-004 — Embeddings, `VectorIndex`, hybrid search
+### `[x]` T-004 — Embeddings, `VectorIndex`, hybrid search
 **Objective.** Retrieval that fuses hard constraints + semantic + lexical, and explains itself.
 
 **Files.** `api/app/catalog/{embeddings.py,index.py,search.py,ranking.py}`,
@@ -248,6 +248,11 @@ cosmetic — fold into T-014 polish if it looks odd on a product card.
 - Query "GPS watch" outranks lexically — proves the lexical arm contributes.
 - Tests run with no network and no API key (deterministic provider).
 - `mypy --strict` clean on `catalog/`.
+
+Completed 2026-08-25 — category-aware documents are cached by content hash, a startup-preloaded
+numpy index fuses deterministic semantic and PostgreSQL lexical ranks with RRF, and the catalog
+API returns audited match reasons and score breakdowns. The full isolated suite (18 tests),
+strict mypy, ruff, generated OpenAPI types, TypeScript, and ESLint pass.
 
 ---
 

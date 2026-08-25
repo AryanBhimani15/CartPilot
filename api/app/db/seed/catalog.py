@@ -10,6 +10,8 @@ from sqlalchemy import delete, func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog.documents import product_document
+from app.catalog.search import refresh_catalog_embeddings
 from app.db.models import Merchant, Product, ProductVariant
 from app.db.seed.offers import SEED_NAMESPACE, seed_offers, stable_id
 from app.db.session import get_session_factory
@@ -264,22 +266,6 @@ def stable_stock(product_sku: str, size: str) -> int:
     return 1 + digest % 24
 
 
-def product_document(product: dict[str, object]) -> str:
-    attrs = product["attrs"]
-    assert isinstance(attrs, dict)
-    fields: list[object] = [
-        product["title"],
-        product["brand"],
-        product["category"],
-        attrs["use_case"],
-        product["description"],
-    ]
-    footwear = attrs.get("footwear")
-    if isinstance(footwear, dict):
-        fields.extend(footwear.values())
-    return " ".join(str(value) for value in fields)
-
-
 async def seed_catalog(session: AsyncSession | None = None) -> None:
     """Load the catalog into an owned session, or a caller-managed test transaction."""
     products = load_products()
@@ -372,6 +358,7 @@ async def _seed_catalog(session: AsyncSession, products: list[dict[str, object]]
             .values(search_tsv=func.to_tsvector("english", product_document(product)))
         )
     await seed_offers(session, MERCHANT_ID)
+    await refresh_catalog_embeddings(session)
 
 
 def main() -> None:

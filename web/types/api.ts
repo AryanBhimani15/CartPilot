@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/v1/catalog/products/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Products
+         * @description Return products after SQL constraints, hybrid RRF and transparent re-ranking.
+         */
+        get: operations["search_products_api_v1_catalog_products_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -24,7 +44,66 @@ export interface paths {
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: never;
+    schemas: {
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /** ScoreBreakdownResponse */
+        ScoreBreakdownResponse: {
+            /** Business */
+            business: number;
+            /** Final */
+            final: number;
+            /** Lexical */
+            lexical: number;
+            /** Rrf */
+            rrf: number;
+            /** Semantic */
+            semantic: number;
+        };
+        /** SearchHitResponse */
+        SearchHitResponse: {
+            /** Attrs */
+            attrs: {
+                [key: string]: unknown;
+            };
+            /** Available Sizes */
+            available_sizes: string[];
+            /** Brand */
+            brand: string;
+            /** Category */
+            category: string;
+            /** Match Reasons */
+            match_reasons: string[];
+            /** Price Paise */
+            price_paise: number;
+            /**
+             * Product Id
+             * Format: uuid
+             */
+            product_id: string;
+            score_breakdown: components["schemas"]["ScoreBreakdownResponse"];
+            /** Sku */
+            sku: string;
+            /** Title */
+            title: string;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+        };
+    };
     responses: never;
     parameters: never;
     requestBodies: never;
@@ -33,6 +112,44 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    search_products_api_v1_catalog_products_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                max_price_paise?: number | null;
+                category?: string | null;
+                in_stock?: boolean;
+                size?: string | null;
+                brand?: string | null;
+                gender?: string | null;
+                k?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchHitResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_api_v1_health_get: {
         parameters: {
             query?: never;

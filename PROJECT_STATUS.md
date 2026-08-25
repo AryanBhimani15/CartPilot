@@ -1,14 +1,14 @@
 # CartPilot AI — Project Status
 
-**Last updated:** 2026-08-25 (Codex, implementation — T-003 follow-ups)
+**Last updated:** 2026-08-25 (Codex, implementation — T-004 hybrid search)
 **Target:** Razorpay AI Builder Internship 2026 — AI Growth & Agentic Commerce
 
 ---
 
 ## Current phase
 
-**Phase 1 complete and reviewed. T-004 is unblocked.** T-003a/b/c merged (`939b450`), reviewed,
-and one catalog-coherence defect fixed on top.
+**Phase 2 retrieval complete.** T-003a/b/c remains reviewed, and T-004 now uses that coherent,
+category-aware catalog for hybrid retrieval.
 
 ---
 
@@ -23,7 +23,14 @@ and one catalog-coherence defect fixed on top.
 - Deterministic seed with declared stockouts and guaranteed demo-path stock
 - Full typed schema, Alembic migrations, enum + variant-axis lifecycle verified over repeat cycles
 - `GET /api/v1/health` real Postgres round-trip; `/shop` and `/dashboard` render
-- **Verified green:** 13 pytest, `mypy --strict app`, ruff, eslint, tsc
+- Hybrid catalog retrieval at `GET /api/v1/catalog/products/search`: budget, category, stock,
+  size, brand, and gender are hard SQL filters; semantic and Postgres lexical signals are fused
+  with RRF; results expose factual `match_reasons` and a score audit trail
+- Product embeddings are category-aware, content-hash cached in `product_embeddings`, refreshed
+  by `make seed`, and loaded into the shared numpy index when the API starts. Tests force the
+  deterministic provider, so they need neither network nor an API key
+- **Verified green:** 18 pytest, `mypy --strict app`, ruff, generated OpenAPI types, eslint, tsc;
+  API startup plus live health and `GPS watch` hybrid-search requests verified locally
 
 ---
 
@@ -37,6 +44,7 @@ and one catalog-coherence defect fixed on top.
 | 4 | `products.sku` / `offers.code` globally unique rather than per-merchant | Low | Accept; revisit if a second merchant appears |
 | 5 | `NullPool` applies to the API server, not just CLI/pytest | Low | T-014 |
 | 6 | No `CHECK` constraints on `stock_qty >= 0` / `reserved_qty <= stock_qty` | Low | Fold into T-005 |
+| 7 | `VECTOR_BACKEND=pgvector` is intentionally fail-fast until deployed against a pgvector-enabled database; local Postgres 14 remains numpy-only per D-003/D-004 | Low | Review deployment implementation when scaling beyond the demo catalog |
 
 **Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed before T-007/T-009.
 
@@ -90,16 +98,17 @@ agent being *stopped by deterministic policy* is what makes this read as enginee
 
 ## Next priorities
 
-1. **T-004** hybrid search — Codex
-5. **Aryan**: obtain Razorpay test-mode credentials and an LLM API key before Phase 3 ends
+1. **T-005** commerce services + cart fingerprint — Codex
+2. **Aryan**: obtain Razorpay test-mode credentials and an LLM API key before Phase 3 ends
 
-**Claude's next action:** review T-003a/b/c, especially test-database containment and category-
-aware seed documents, then direct T-004.
+**Claude's next action:** review T-004's hybrid ranking and cache boundary — especially the
+₹6,500 hard-budget exclusion and the nonzero lexical contribution on `GPS watch` — then direct
+T-005.
 
 ---
 
 ## Demo readiness
 
-**2 / 10.** The foundation and demo-load-bearing catalog are working, but the core customer
+**3 / 10.** The foundation, coherent catalog, and retrieval tool are working, but the customer
 experience, agent, policy layer, and Razorpay flow remain. The realistic path to a credible
-5-minute demo is still T-004→T-009, then T-010→T-013.
+5-minute demo is T-005→T-009, then T-010→T-013.

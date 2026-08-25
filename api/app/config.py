@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     llm_model: str = "claude-sonnet-5"
     anthropic_api_key: str | None = None
     embedding_provider: str = "deterministic"
-    embedding_model: str
+    # Verified against official OpenAI documentation on 2026-08-25. This is used only when
+    # EMBEDDING_PROVIDER=openai; the deterministic provider has its own stable model id.
+    embedding_model: str = "text-embedding-3-small"
     embedding_api_key: str | None = None
     eval_use_real_embeddings: bool = False
     vector_backend: str = "numpy"
