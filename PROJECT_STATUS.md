@@ -1,28 +1,35 @@
 # CartPilot AI — Project Status
 
-**Last updated:** 2026-08-25 (Claude, tech lead)
+**Last updated:** 2026-08-25 (Codex, implementation)
 **Target:** Razorpay AI Builder Internship 2026 — AI Growth & Agentic Commerce
 
 ---
 
 ## Current phase
 
-**Phase 1 — Foundation.** Not started. The repository contained no code at the time of this
-inspection: a single stray file whose *filename* was the demo prompt (an accidental shell
-redirect), holding a truncated copy of the project brief. It has been moved to
-`docs/_inbox/original-brief-fragment.md`. Git has been initialised.
-
-Architecture, decisions and the work queue are now fixed. Codex starts at **T-001**.
+**Phase 1 — Foundation.** T-001 through T-003 are complete. The repo now has a FastAPI +
+Next.js scaffold, an Alembic-owned PostgreSQL schema, and a deterministic seed catalog. Next is
+T-004 (hybrid product retrieval).
 
 ---
 
 ## What works
 
-Nothing is running yet. Confirmed about the environment:
-
-- Postgres **14.22** (Homebrew) is running and accepting connections on `:5432`
-- Node **v25.6.1** / npm 11.9.0, Python **3.12.5**, git 2.50.1
-- **Docker is not installed**; **pgvector is not installed** — both shaped D-003 and D-004
+- `make setup` installs the Python and web dependencies and creates `.env` from the fake-value
+  template when absent. `make db`, `make seed`, `make test`, `make types`, `make lint`, and
+  `make typecheck` are available.
+- `GET /api/v1/health` performs a real async Postgres query and returned
+  `{"status":"ok","db":"ok"}` locally.
+- `/shop` and `/dashboard` build and render cleanly as Phase 1 placeholders.
+- The core schema contains all §4 tables, named native PostgreSQL enums, required GIN/uniqueness
+  indexes, BigInteger paise fields, and the required provenance columns.
+- Migration upgrade/downgrade was exercised twice. The migration explicitly manages native enum
+  lifecycle so a downgrade does not block a subsequent clean upgrade.
+- `make seed` is deterministic and idempotent: 31 products, 217 size-specific variants, and
+  three offers. Its database-backed test verifies stable IDs, deliberate out-of-stocks, the
+  stability/budget demo path, cross-sells, and trademark exclusion.
+- Final local checks passed: 5 pytest tests, strict backend mypy, Ruff, web ESLint, web TypeScript,
+  and a production Next build.
 
 ---
 
@@ -30,7 +37,7 @@ Nothing is running yet. Confirmed about the environment:
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Nothing implemented; 7 phases to go | Schedule | Sequenced queue in `TASKS.md`; phases 1–4 are the demo spine, 5–6 are the differentiator |
+| Agent, retrieval, checkout and analytics are not implemented yet | No end-to-end commerce demo yet | Proceed in task order starting T-004 |
 | No Razorpay test credentials in `.env` yet | Blocks Phase 4 | **Aryan**: create a Razorpay test account and supply `key_id` / `key_secret` / webhook secret before T-009 |
 | Local webhooks are unreachable from Razorpay | Payment state may not converge in a local demo | D-009 polling reconciler (T-009); optionally a tunnel during the live demo |
 | No LLM/embedding API keys configured | Blocks T-004, T-007 | Deterministic providers keep tests and eval running without keys (D-005) |
@@ -76,20 +83,16 @@ agent being *stopped by deterministic policy* is what makes this read as enginee
 
 ## Next priorities
 
-1. **T-001** repo scaffold + one-command dev — Codex, now
-2. **T-002** schema + migrations — Codex
-3. **T-003** synthetic catalog — Codex (demo-load-bearing; the acceptance criteria are exact)
-4. **T-004** hybrid search — Codex
+1. **T-004** hybrid search — Codex
 5. **Aryan**: obtain Razorpay test-mode credentials and an LLM API key before Phase 3 ends
 
-**Claude's next action:** review T-001–T-003 on completion against the acceptance criteria,
-then update this file and `TASKS.md`.
+**Claude's next action:** review T-001–T-003 against their acceptance criteria, especially the
+full migration's enum lifecycle and catalog taxonomy, then direct T-004.
 
 ---
 
 ## Demo readiness
 
-**0 / 10.** Architecture is settled and the queue is unambiguous, which is the cheapest time to
-get those right — but no code exists. Realistic path to a credible 5-minute demo is
-T-001→T-009 (spine), then T-010→T-013 (the growth + evaluation story that differentiates this
-from a shopping chatbot).
+**2 / 10.** The foundation and demo-load-bearing catalog are working, but the core customer
+experience, agent, policy layer, and Razorpay flow remain. The realistic path to a credible
+5-minute demo is still T-004→T-009, then T-010→T-013.

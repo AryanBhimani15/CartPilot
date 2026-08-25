@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.db.session import get_db_session
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    get_settings()
+    yield
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    application = FastAPI(title="CartPilot API", version="0.1.0", lifespan=lifespan)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+    )
+
+    @application.get("/api/v1/health", tags=["health"])
+    async def health(db: AsyncSession = Depends(get_db_session)) -> dict[str, str]:
+        await db.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+
+    return application
+
+
+app = create_app()

@@ -14,7 +14,7 @@ Rules for Codex:
 
 ## PHASE 1 — FOUNDATION  ◄ current
 
-### `[ ]` T-001 — Repo scaffold, config, one-command dev
+### `[x]` T-001 — Repo scaffold, config, one-command dev
 **Objective.** `git clone && make setup && make dev` brings up API + web with zero manual steps.
 
 **Files.** `Makefile`, `.env.example`, `.gitignore`, `README.md` (stub),
@@ -35,9 +35,11 @@ Rules for Codex:
 - `web` renders a placeholder `/shop` and `/dashboard` with no console errors.
 - Removing a required env var makes the API fail to start with a named error.
 
+Completed 2026-08-25 — `make setup`, API health with a real Postgres round-trip, and both placeholder routes verified locally; config validation is covered by pytest.
+
 ---
 
-### `[ ]` T-002 — Database schema + migrations
+### `[x]` T-002 — Database schema + migrations
 **Objective.** The full data model from `ARCHITECTURE.md` §4, as typed SQLAlchemy 2.0 models
 and one Alembic migration.
 
@@ -61,9 +63,11 @@ and one Alembic migration.
 - `mypy --strict api/app/db api/app/domain` passes.
 - A unit test asserts no column in the metadata is `Float`/`Numeric`.
 
+Completed 2026-08-25 — full typed core schema and native PostgreSQL enums landed in `0001`; upgrade/downgrade cycles, strict mypy, and money-type assertions pass.
+
 ---
 
-### `[ ]` T-003 — Synthetic merchant catalog (demo-load-bearing)
+### `[x]` T-003 — Synthetic merchant catalog (demo-load-bearing)
 **Objective.** A realistic Indian D2C sportswear catalog that makes the scripted demo work and
 gives the eval something honest to measure.
 
@@ -94,6 +98,8 @@ gives the eval something honest to measure.
 - `make seed` twice ⇒ identical row counts and identical ids.
 - A test asserts each demo-path guarantee above holds against the seeded DB.
 - No real-world trademark appears in `products.json`.
+
+Completed 2026-08-25 — idempotent seed loads 31 products / 217 variants and 3 offers; database-backed tests verify stable IDs and every required demo-path guarantee.
 
 ---
 

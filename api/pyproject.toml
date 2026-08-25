@@ -1,0 +1,45 @@
+[project]
+name = "cartpilot-api"
+version = "0.1.0"
+description = "CartPilot AI FastAPI backend"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14,<2",
+  "asyncpg>=0.30,<1",
+  "fastapi>=0.115,<1",
+  "greenlet>=3.1,<4",
+  "pydantic-settings>=2.7,<3",
+  "sqlalchemy>=2.0.36,<3",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.8,<1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = []
+warn_unused_configs = true
+
+[tool.uv]
+package = false
