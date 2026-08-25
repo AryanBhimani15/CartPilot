@@ -1,49 +1,67 @@
 # CartPilot AI — Project Status
 
-**Last updated:** 2026-08-25 (Codex, implementation)
+**Last updated:** 2026-08-25 (Claude, tech lead — post T-001…T-003 review)
 **Target:** Razorpay AI Builder Internship 2026 — AI Growth & Agentic Commerce
 
 ---
 
 ## Current phase
 
-**Phase 1 — Foundation.** T-001 through T-003 are complete. The repo now has a FastAPI +
-Next.js scaffold, an Alembic-owned PostgreSQL schema, and a deterministic seed catalog. Next is
-T-004 (hybrid product retrieval).
+**Phase 1 complete, reviewed.** T-001, T-002 and T-003 are merged (`a6c1600`). Claude has
+reviewed them and applied fixes on top; three follow-ups are queued as T-003a/b/c.
+
+Phase 2 (T-004, hybrid search) is **gated on T-003b** — embedding a polluted document set would
+be work thrown away.
 
 ---
 
 ## What works
 
-- `make setup` installs the Python and web dependencies and creates `.env` from the fake-value
-  template when absent. `make db`, `make seed`, `make test`, `make types`, `make lint`, and
-  `make typecheck` are available.
-- `GET /api/v1/health` performs a real async Postgres query and returned
-  `{"status":"ok","db":"ok"}` locally.
-- `/shop` and `/dashboard` build and render cleanly as Phase 1 placeholders.
-- The core schema contains all §4 tables, named native PostgreSQL enums, required GIN/uniqueness
-  indexes, BigInteger paise fields, and the required provenance columns.
-- Migration upgrade/downgrade was exercised twice. The migration explicitly manages native enum
-  lifecycle so a downgrade does not block a subsequent clean upgrade.
-- `make seed` is deterministic and idempotent: 31 products, 217 size-specific variants, and
-  three offers. Its database-backed test verifies stable IDs, deliberate out-of-stocks, the
-  stability/budget demo path, cross-sells, and trademark exclusion.
-- Final local checks passed: 5 pytest tests, strict backend mypy, Ruff, web ESLint, web TypeScript,
-  and a production Next build.
+- `make setup / db / seed / dev / test / types / typecheck / lint` all run clean
+- `GET /api/v1/health` performs a real Postgres round-trip
+- Full typed schema + Alembic migration; enum create/drop verified over repeated up/down cycles
+- Idempotent, deterministic catalog seed (31 products / 217 variants / 3 offers), stable IDs
+- `/shop` and `/dashboard` render; the visual direction is distinctive, not templated
+- **Verified green:** 7 pytest tests, `mypy --strict app`, ruff, eslint, tsc
 
 ---
 
 ## What is broken / at risk
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Agent, retrieval, checkout and analytics are not implemented yet | No end-to-end commerce demo yet | Proceed in task order starting T-004 |
-| No Razorpay test credentials in `.env` yet | Blocks Phase 4 | **Aryan**: create a Razorpay test account and supply `key_id` / `key_secret` / webhook secret before T-009 |
-| Local webhooks are unreachable from Razorpay | Payment state may not converge in a local demo | D-009 polling reconciler (T-009); optionally a tunnel during the live demo |
-| No LLM/embedding API keys configured | Blocks T-004, T-007 | Deterministic providers keep tests and eval running without keys (D-005) |
-| Scope creep into "AI insights" narrative panels | Credibility | Explicitly in the TASKS.md do-not-build backlog |
+Findings from the T-001…T-003 review, highest severity first.
+
+| # | Finding | Severity | State |
+|---|---|---|---|
+| 1 | `RIV-STRIDE-34` — the flagship demo shoe — was **out of stock in UK 9**. Stockouts were hash-derived (`digest % 13`), so 22/217 variants were zero by accident. The seed test only checked stock summed across sizes, so it passed. | Demo-breaking | **Fixed by Claude** |
+| 2 | `make types` was a no-op: the generator fetched the OpenAPI schema, discarded it, and wrote a hardcoded `HealthResponse` string. It would have silently produced wrong types from T-004 onward. | Hallucinated functionality | **Fixed by Claude** |
+| 3 | `make test` runs against the **dev** database and `test_seed_catalog` writes to it. Confirmed: a test run left all 217 variants in dev `cartpilot`. | High — compounds | **T-003a** |
+| 4 | Every product gets shoe sizes UK 6–12: a foam roller in UK 9, a GPS watch in UK 11. Shoe-only `attrs` on every category pollute `product_document()`, which feeds `search_tsv` and T-004 embeddings. | High — blocks T-004 | **T-003b** |
+| 5 | Catalog is 31 SKUs against a spec of 180–220. Too thin for retrieval to discriminate or for T-012 precision@k to mean anything. | Medium | **T-003c** |
+| 6 | `mypy --strict` ran on `app/db app/domain` only; the wider app had an error. | Low | **Fixed by Claude** |
+| 7 | `products.sku` and `offers.code` are globally unique rather than unique per `merchant_id`. | Low | Accept for now; revisit if a second merchant appears |
+| 8 | `NullPool` is used for the API server, not just for CLI/pytest — a new connection per request. | Low | Revisit under T-014 |
+| 9 | No `CHECK` constraints on `stock_qty >= 0` / `reserved_qty <= stock_qty`. | Low | Fold into T-005 oversell work |
+
+Still outstanding from before: **Razorpay test credentials and an LLM API key are placeholders**
+(`.env` holds `REPLACE_ME`). Needed before T-007/T-009. Tests and eval run without them by design.
 
 ---
+
+## What Claude changed in this pass
+
+- `api/app/db/seed/catalog.py` — stockouts are now **declared** (`DELIBERATE_OUT_OF_STOCK`),
+  never hash-derived; `DEMO_PATH_SKUS` are guaranteed in stock in every size
+- `api/tests/test_seed_catalog.py` — two new tests: demo-path SKUs stocked in *every* size
+  (not summed), and every zero-stock variant is declared. The second test immediately caught
+  two further accidental stockouts, which is why the hash path was removed entirely
+- `api/scripts/generate_openapi_types.py` — now emits the real schema to `web/types/openapi.json`
+- `Makefile` — `make types` runs `openapi-typescript` for genuine codegen; `typecheck` covers `app`
+- `web/package.json` — added `openapi-typescript` devDependency; `web/types/api.ts` regenerated
+- `api/app/main.py` — annotated `lifespan` so `mypy --strict app` is clean
+- `TASKS.md` — added T-003a/b/c; T-004 now requires a category-aware embedding document
+
+**Spec bug owned:** T-003's "~180–220 SKUs" lived in *Details*, not *Acceptance*. Codex met the
+acceptance block as written. T-003c encodes the count as a threshold assertion instead.
 
 ## Recent decisions
 

@@ -37,9 +37,10 @@ test: db
 
 types:
 	@set -a; . ./.env; set +a; $(PY) python -m scripts.generate_openapi_types
+	npm --prefix $(WEB_DIR) exec -- openapi-typescript $(WEB_DIR)/types/openapi.json -o $(WEB_DIR)/types/api.ts
 
 typecheck:
-	$(PY) mypy --strict app/db app/domain
+	$(PY) mypy --strict app
 	npm --prefix $(WEB_DIR) run typecheck
 
 eval:

@@ -7,7 +7,13 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db.models import Offer, Product, ProductVariant
-from app.db.seed.catalog import DATA_FILE, seed_catalog
+from app.db.seed.catalog import (
+    DATA_FILE,
+    DELIBERATE_OUT_OF_STOCK,
+    DEMO_PATH_SKUS,
+    SIZES,
+    seed_catalog,
+)
 from app.db.session import get_session_factory
 
 
@@ -83,3 +89,40 @@ def test_seed_data_contains_no_real_world_trademarks() -> None:
     payload = json.dumps(json.loads(Path(DATA_FILE).read_text(encoding="utf-8"))).lower()
     prohibited = ("nike", "adidas", "asics", "puma", "reebok", "new balance")
     assert not any(mark in payload for mark in prohibited)
+
+
+@pytest.mark.asyncio
+async def test_demo_path_skus_are_in_stock_in_every_size() -> None:
+    """Aggregate stock > 0 is not enough: the demo picks one size, not the sum of sizes."""
+    await seed_catalog()
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(Product.sku, ProductVariant.size, ProductVariant.stock_qty).join(
+                    ProductVariant, ProductVariant.product_id == Product.id
+                )
+            )
+        ).all()
+
+    stock = {(sku, size): qty for sku, size, qty in rows}
+    for sku in DEMO_PATH_SKUS:
+        for size in SIZES:
+            assert stock[(sku, size)] > 0, f"demo-path SKU {sku} is out of stock in {size}"
+
+
+@pytest.mark.asyncio
+async def test_out_of_stock_variants_are_declared_not_incidental() -> None:
+    """Every stockout is declared, so inventory scenarios are reproducible."""
+    await seed_catalog()
+    async with get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(Product.sku, ProductVariant.size, ProductVariant.stock_qty)
+                .join(ProductVariant, ProductVariant.product_id == Product.id)
+            )
+        ).all()
+
+    zero = {(sku, size) for sku, size, qty in rows if qty == 0}
+    assert zero == set(DELIBERATE_OUT_OF_STOCK), (
+        "stockouts must be declared in DELIBERATE_OUT_OF_STOCK, not hash-derived"
+    )

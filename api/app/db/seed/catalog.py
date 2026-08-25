@@ -25,12 +25,49 @@ def load_products() -> list[dict[str, object]]:
     return cast(list[dict[str, object]], payload)
 
 
+# Products the scripted demo walks through. These must never be out of stock in any
+# size: a hash-random zero here silently breaks the demo (see PROJECT_STATUS.md).
+DEMO_PATH_SKUS = frozenset(
+    {
+        "RIV-STRIDE-34",
+        "RIV-HARBOR-2",
+        "KORA-ALIGN-3",
+        "VAYU-CONTROL-1",
+        "VAYU-ANCHOR-X",
+        "RIV-SOCK-AB",
+        "RIV-ORTHO-1",
+        "RIV-ROLLER-CORE",
+    }
+)
+
+# Chosen, not hashed: the STOCK_AVAILABLE policy rule and check_inventory need a
+# predictable out-of-stock variant on an in-budget shoe the agent will plausibly surface.
+# This is the complete set of zero-stock variants in the catalog.
+DELIBERATE_OUT_OF_STOCK = frozenset(
+    {
+        ("KORA-CLOUD-5", "UK 9"),
+        ("KORA-CLOUD-5", "UK 10"),
+        ("VAYU-PULSE-4", "UK 9"),
+        ("RIV-METRO-2", "UK 8"),
+        ("KORA-SWIFT-2", "UK 11"),
+        ("KORA-SOCK-CREW", "UK 8"),
+        ("RIV-SHORT-5", "UK 10"),
+    }
+)
+
+
 def stable_stock(product_sku: str, size: str) -> int:
-    """Return uneven but repeatable stock, reserving intentional zero-stock variants."""
-    digest = uuid.uuid5(SEED_NAMESPACE, f"stock:{product_sku}:{size}").int
-    if digest % 13 == 0:
+    """Return uneven but repeatable stock.
+
+    Out-of-stock variants are declared, never hash-derived, so the demo path and the
+    inventory-policy path are both reproducible instead of accidents of a UUID digest.
+    """
+    if (product_sku, size) in DELIBERATE_OUT_OF_STOCK:
         return 0
-    return 2 + digest % 23
+    digest = uuid.uuid5(SEED_NAMESPACE, f"stock:{product_sku}:{size}").int
+    if product_sku in DEMO_PATH_SKUS:
+        return 4 + digest % 21
+    return 1 + digest % 24
 
 
 def product_document(product: dict[str, object]) -> str:

@@ -101,7 +101,100 @@ gives the eval something honest to measure.
 
 Completed 2026-08-25 — idempotent seed loads 31 products / 217 variants and 3 offers; database-backed tests verify stable IDs and every required demo-path guarantee.
 
+Reviewed 2026-08-25 (Claude) — acceptance block satisfied as written. Three gaps found that the
+acceptance criteria failed to encode; split into T-003a/b/c below. Claude directly fixed the
+demo-breaking stock bug (see PROJECT_STATUS.md).
+
 ---
+
+---
+
+### `[ ]` T-003a — Isolate the test database  ◄ **do this first**
+**Objective.** `make test` must not read or write the development database.
+
+**Files.** `api/tests/conftest.py`, `Makefile`, `.env.example`, `api/app/config.py`.
+
+**Problem found in review.** `test: db` runs pytest against `DATABASE_URL`, and
+`test_seed_catalog` calls `seed_catalog()` — so running the suite rewrites dev data. Verified:
+after a test run the dev `cartpilot` database held all 217 seeded variants. Every future task
+adds DB tests, so this compounds until the suite is untrustworthy.
+
+**Details.**
+- Add `TEST_DATABASE_URL` (required when `APP_ENV=test`), default `..._test`.
+- `conftest.py`: session-scoped fixture that creates the test DB if absent, runs
+  `alembic upgrade head`, and **refuses to run if the resolved URL equals `DATABASE_URL`**.
+- Per-test isolation via a transaction rolled back after each test, so tests don't leak into
+  each other. Seed tests that need committed data get an explicit opt-in fixture.
+
+**Acceptance.**
+- `make test` leaves the dev database byte-identical (verify row counts + `max(updated_at)`).
+- A test asserting `TEST_DATABASE_URL != DATABASE_URL` fails the run when they match.
+- The suite passes twice consecutively from a clean and from a seeded dev DB.
+
+---
+
+### `[ ]` T-003b — Category-aware variant axes and attribute schema  ◄ **blocks T-004**
+**Objective.** Stop modelling every product as a shoe.
+
+**Files.** `api/app/db/seed/catalog.py`, `api/app/db/seed/data/products.json`,
+`api/app/domain/enums.py`, `api/app/db/models.py`, `api/tests/test_seed_catalog.py`.
+
+**Problem found in review.** `SIZES = UK 6…UK 12` is applied to **every** product, so the seed
+contains a foam roller in UK 9, a GPS watch in UK 11, and hydration flasks in seven shoe sizes
+(31 × 7 = the reported 217 "variants"). Every variant is also `colour="Graphite"`. Separately,
+`attrs` forces shoe-only fields onto everything: a GPS watch carries
+`arch_support: "neutral"`, `cushioning: "low"`, `drop_mm: 0`, `terrain: "road"`.
+
+This breaks three things downstream: `check_inventory` and the cart UI ask for a UK size on a
+foam roller; the T-003 upsell (`RIV-SOCK-AB`) forces a shoe-size choice on socks; and
+`product_document()` — which feeds both `search_tsv` and the T-004 embeddings — injects
+`"neutral road"` into the text of every watch, roller and flask, adding pure noise to retrieval.
+
+**Details.**
+- Variant axis per category: `running_shoes`/`training_shoes` → UK 6–12;
+  `socks`/`apparel` → S/M/L/XL; `insoles` → S/M/L; `recovery`/`hydration`/`gps_watches` →
+  a single `One Size` variant. Colours should vary per category, not be a constant.
+- Split `attrs` into a shared block (`use_case`, `gender`, `rating`, `review_count`) and a
+  category-specific block (`footwear: {arch_support, cushioning, drop_mm, terrain, weight_g}`).
+  Filters must key off the category-specific block only.
+- `product_document()` becomes category-aware: compose only the fields that exist for that
+  category. This is the input to T-004 embeddings — get it right before anything is embedded.
+
+**Acceptance.**
+- No non-footwear product has a `UK *` variant; a test asserts this per category.
+- `product_document("KORA-GPS-ONE")` contains no footwear vocabulary
+  (`arch_support`, `terrain`, `drop`, `cushioning`).
+- Demo-path stock guarantees and `DELIBERATE_OUT_OF_STOCK` still hold after the axis change.
+- Adding `RIV-SOCK-AB` to a cart requires a sock size, not a shoe size.
+
+---
+
+### `[ ]` T-003c — Expand the catalog to ~150 SKUs
+**Objective.** Give retrieval and the evaluation something real to discriminate between.
+
+**Files.** `api/app/db/seed/data/products.json`, `api/tests/test_seed_catalog.py`.
+
+**Problem found in review.** T-003 specified ~180–220 SKUs; the seed ships **31**. The
+acceptance block only checked the demo-path guarantees, so this passed review mechanically —
+a spec bug on Claude's side, now corrected here. At 31 SKUs only ~12 are running shoes, so
+hybrid search has almost nothing to rank, precision@k in T-012 is measured over a candidate
+set too small to be meaningful, and "unmet demand" analytics in T-010 has no tail to find.
+
+**Details.**
+- Target ~150 SKUs. Depth matters more than breadth: ~55 running shoes spanning
+  neutral/stability/motion-control × road/trail × ₹2,500–12,000, so budget and arch filters
+  each have real competition to resolve.
+- Include genuine near-misses: right arch support but over budget, right price but wrong
+  use case, right everything but out of stock.
+- Include a deliberate demand gap for T-010 (e.g. **no** motion-control shoe under ₹3,500)
+  so "unmet demand" surfaces a real finding rather than an empty table.
+- Do this **after** T-003b so the new rows use the corrected attribute schema.
+
+**Acceptance.**
+- ≥140 products; ≥50 in `running_shoes`; every category ≥4 SKUs.
+- All existing demo-path guarantee tests still pass unchanged.
+- Hard-coded count assertions in tests are replaced by threshold assertions
+  (`>= 140`, not `== 31`), so the catalog can grow without editing tests.
 
 ## PHASE 2 — PRODUCT INTELLIGENCE
 
@@ -114,7 +207,9 @@ Completed 2026-08-25 — idempotent seed loads 31 products / 217 variants and 3 
 **Details.**
 - `EmbeddingProvider` protocol + hosted impl + `DeterministicEmbeddingProvider` (D-005).
   **Verify the exact hosted model id against live provider docs before pinning it.**
-- Embedded document = `title · brand · category · use_case · arch_support · terrain · description`.
+- Embedded document is **category-aware** (T-003b): shared fields for every product, footwear
+  fields only for footwear. Do not embed anything until T-003b lands — re-embedding a
+  polluted document set is wasted work.
 - `NumpyVectorIndex` default; `PgVectorIndex` behind `VECTOR_BACKEND` (D-004).
 - `search_products(query, filters, k)`: filters are **hard SQL WHERE** (budget, category,
   in_stock, size, brand, gender); vector + `ts_rank` are fused by RRF; then a transparent
