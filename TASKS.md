@@ -203,6 +203,22 @@ set too small to be meaningful, and "unmet demand" analytics in T-010 has no tai
 
 Completed 2026-08-25 — deterministic expansion produces 140 products, including 59 running shoes; threshold tests cover category breadth and the deliberate no-motion-control-under-₹3,500 demand gap.
 
+**Reviewed 2026-08-25 (Claude).** T-003a and T-003b verified clean: dev DB provably unchanged
+across two `make test` runs, zero non-footwear UK-size variants, footwear attrs correctly nested,
+and `product_document("KORA-GPS-ONE")` free of footwear vocabulary.
+
+T-003c reached 140 products by generating ~109 rows from 31 authored archetypes. The expansion
+reassigned `arch_support` / `terrain` / `cushioning` on a cycle while **inheriting the archetype's
+description**, so 36 of 59 running shoes carried prose contradicting their own attributes — e.g.
+`VAYU-CONTROL-1-E10` read "for runners needing motion control" with `arch_support: neutral`.
+Prices also collapsed onto floor clamps (23 distinct prices across 59 shoes, 4 at exactly ₹3,500).
+
+Claude fixed both directly: generated running-shoe prose is now composed from the assigned
+attributes, and `spread_price()` replaces the clamps. Three regression tests added. Residual,
+**not** blocking T-004: generated rows still inherit the archetype *title*
+("Cloudline 5 Series 5" on a stability shoe). Model names don't assert a fit type, so this is
+cosmetic — fold into T-014 polish if it looks odd on a product card.
+
 ## PHASE 2 — PRODUCT INTELLIGENCE
 
 ### `[ ]` T-004 — Embeddings, `VectorIndex`, hybrid search

@@ -7,62 +7,50 @@
 
 ## Current phase
 
-**Phase 1 complete, reviewed.** T-001 through T-003c are complete. Phase 2 may now start at
-T-004: seed documents are category-aware and the catalog has enough product depth for retrieval.
+**Phase 1 complete and reviewed. T-004 is unblocked.** T-003a/b/c merged (`939b450`), reviewed,
+and one catalog-coherence defect fixed on top.
 
 ---
 
 ## What works
 
-- `make setup / db / seed / dev / test / types / typecheck / lint` all run clean
-- `GET /api/v1/health` performs a real Postgres round-trip
-- Full typed schema + Alembic migration; enum create/drop verified over repeated up/down cycles
-- Idempotent, deterministic catalog seed (140 products / 703 variants / 3 offers), stable IDs
-- `make test` creates and uses only `cartpilot_test`; it rejects equal dev/test URLs, rolls back
-  per-test writes, and verifies dev table counts plus `max(updated_at)` are unchanged.
-- Category-aware variants: footwear uses UK sizes, socks/apparel use S/M/L/XL, insoles use S/M/L,
-  and recovery/hydration/GPS products use One Size. Footwear-only facts live in `attrs.footwear`.
-- `/shop` and `/dashboard` render; the visual direction is distinctive, not templated
-- **Verified green:** 10 pytest tests, `mypy --strict app`, ruff, eslint, tsc
+- Isolated test database: `make test` runs against `cartpilot_test`, rejects a dev/test URL
+  collision, rolls back DB-writing tests. **Verified**: dev `products` count and `max(updated_at)`
+  are byte-identical across two consecutive runs
+- Category-aware variants: 140 products / 703 variants. **Verified**: zero non-footwear UK-size
+  variants, footwear attrs nested under `attrs.footwear`, and the GPS-watch search document
+  contains no footwear vocabulary
+- Deterministic seed with declared stockouts and guaranteed demo-path stock
+- Full typed schema, Alembic migrations, enum + variant-axis lifecycle verified over repeat cycles
+- `GET /api/v1/health` real Postgres round-trip; `/shop` and `/dashboard` render
+- **Verified green:** 13 pytest, `mypy --strict app`, ruff, eslint, tsc
 
 ---
 
 ## What is broken / at risk
 
-Findings from the T-001…T-003 review, highest severity first.
-
 | # | Finding | Severity | State |
 |---|---|---|---|
-| 1 | `RIV-STRIDE-34` — the flagship demo shoe — was **out of stock in UK 9**. Stockouts were hash-derived (`digest % 13`), so 22/217 variants were zero by accident. The seed test only checked stock summed across sizes, so it passed. | Demo-breaking | **Fixed by Claude** |
-| 2 | `make types` was a no-op: the generator fetched the OpenAPI schema, discarded it, and wrote a hardcoded `HealthResponse` string. It would have silently produced wrong types from T-004 onward. | Hallucinated functionality | **Fixed by Claude** |
-| 3 | Tests previously wrote to the dev database. | High — compounds | **Fixed (T-003a)** |
-| 4 | Non-footwear previously used shoe variants and polluted retrieval documents. | High — blocked T-004 | **Fixed (T-003b)** |
-| 5 | Catalog previously had only 31 products. | Medium | **Fixed (T-003c: 140 products / 59 running shoes)** |
-| 6 | `mypy --strict` ran on `app/db app/domain` only; the wider app had an error. | Low | **Fixed by Claude** |
-| 7 | `products.sku` and `offers.code` are globally unique rather than unique per `merchant_id`. | Low | Accept for now; revisit if a second merchant appears |
-| 8 | `NullPool` is used for the API server, not just for CLI/pytest — a new connection per request. | Low | Revisit under T-014 |
-| 9 | No `CHECK` constraints on `stock_qty >= 0` / `reserved_qty <= stock_qty`. | Low | Fold into T-005 oversell work |
+| 1 | Catalog expansion reassigned `arch_support`/`terrain`/`cushioning` per row but inherited the archetype's description, so **36 of 59 running shoes had prose contradicting their own attributes** (`VAYU-CONTROL-1-E10`: "for runners needing motion control", `arch_support: neutral`). Would have poisoned T-004 embeddings and put visible contradictions on demo product cards. | High — would have corrupted Phase 2 | **Fixed by Claude** |
+| 2 | Price floors were applied with `max()`, collapsing rows onto identical values — 23 distinct prices across 59 shoes, 4 at exactly ₹3,500. Makes budget-boundary behaviour look artificial. | Medium | **Fixed by Claude** |
+| 3 | Generated rows inherit the archetype *title* ("Cloudline 5 Series 5" on a stability shoe). Model names assert nothing about fit, so cosmetic only. | Low | T-014 polish |
+| 4 | `products.sku` / `offers.code` globally unique rather than per-merchant | Low | Accept; revisit if a second merchant appears |
+| 5 | `NullPool` applies to the API server, not just CLI/pytest | Low | T-014 |
+| 6 | No `CHECK` constraints on `stock_qty >= 0` / `reserved_qty <= stock_qty` | Low | Fold into T-005 |
 
-Still outstanding from before: **Razorpay test credentials and an LLM API key are placeholders**
-(`.env` holds `REPLACE_ME`). Needed before T-007/T-009. Tests and eval run without them by design.
+**Razorpay test credentials and an LLM API key are still `REPLACE_ME`.** Needed before T-007/T-009.
 
 ---
 
 ## What Claude changed in this pass
 
-- `api/app/db/seed/catalog.py` — stockouts are now **declared** (`DELIBERATE_OUT_OF_STOCK`),
-  never hash-derived; `DEMO_PATH_SKUS` are guaranteed in stock in every size
-- `api/tests/test_seed_catalog.py` — two new tests: demo-path SKUs stocked in *every* size
-  (not summed), and every zero-stock variant is declared. The second test immediately caught
-  two further accidental stockouts, which is why the hash path was removed entirely
-- `api/scripts/generate_openapi_types.py` — now emits the real schema to `web/types/openapi.json`
-- `Makefile` — `make types` runs `openapi-typescript` for genuine codegen; `typecheck` covers `app`
-- `web/package.json` — added `openapi-typescript` devDependency; `web/types/api.ts` regenerated
-- `api/app/main.py` — annotated `lifespan` so `mypy --strict app` is clean
-- `TASKS.md` — added T-003a/b/c; T-004 now requires a category-aware embedding document
-
-**Spec bug owned:** T-003's "~180–220 SKUs" lived in *Details*, not *Acceptance*. Codex met the
-acceptance block as written. T-003c encodes the count as a threshold assertion instead.
+- `api/app/db/seed/catalog.py` — generated running-shoe descriptions are composed from the
+  attributes actually assigned to the row (`running_shoe_description()`); `spread_price()`
+  replaces floor clamps so prices don't pile up
+- `api/tests/test_seed_catalog.py` — three regression tests: prose never contradicts attributes,
+  prices are not clustered on a floor, and the motion-control demand gap is preserved
+- Result: contradictions 36 → **0**; distinct running-shoe prices 23 → **56**; demand gap intact
+  (cheapest motion-control shoe ₹3,631)
 
 ## Recent decisions
 

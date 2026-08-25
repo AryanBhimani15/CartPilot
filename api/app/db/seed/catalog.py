@@ -57,6 +57,45 @@ EXPANSION_TARGETS = {
 RUNNING_USE_CASES = ("daily_easy_runs", "speed", "trail")
 RUNNING_ARCH_SUPPORT = ("neutral", "stability", "motion_control")
 
+# Generated running shoes must not inherit an archetype's prose, because the expansion
+# reassigns arch support, terrain and cushioning on a cycle. Inheriting the text produced
+# descriptions that contradicted the row's own attributes (e.g. "for runners needing motion
+# control" on a neutral shoe), which would poison both the T-004 embeddings and the
+# match_reasons shown on a product card (D-012). Compose the prose from the assigned facts.
+ARCH_PHRASE = {
+    "neutral": "Neutral-ride",
+    "stability": "Supportive stability",
+    "motion_control": "Structured motion-control",
+}
+USE_CASE_PHRASE = {
+    "daily_easy_runs": "daily easy runs",
+    "speed": "faster tempo sessions",
+    "trail": "trail miles",
+}
+CUSHION_PHRASE = {"low": "firm", "medium": "balanced", "high": "plush"}
+
+
+def running_shoe_description(
+    brand: str, arch_support: str, use_case: str, terrain: str, cushioning: str, drop_mm: int
+) -> str:
+    return (
+        f"{ARCH_PHRASE[arch_support]} {terrain} running shoe from {brand}, built for "
+        f"{USE_CASE_PHRASE[use_case]} with {CUSHION_PHRASE[cushioning]} cushioning "
+        f"and a {drop_mm}mm heel-to-toe drop."
+    )
+
+
+def spread_price(template_price: int, index: int, floor_paise: int) -> int:
+    """Deterministic price spread that never collapses onto the floor.
+
+    A plain `max(floor, price)` piled four shoes onto exactly the same price, which makes
+    budget-boundary behaviour look artificial in both the demo and the T-012 evaluation.
+    """
+    price = template_price + (((index * 7) % 19) - 6) * 21_700
+    if price < floor_paise:
+        price = floor_paise + ((index * 13) % 11) * 17_300
+    return price
+
 
 def load_products() -> list[dict[str, object]]:
     payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
@@ -83,20 +122,27 @@ def expand_catalog(products: list[dict[str, object]]) -> list[dict[str, object]]
                 raw_attrs.update(footwear)
             template_price = template["price_paise"]
             assert isinstance(template_price, int)
-            price_paise = template_price + ((index % 12) - 4) * 29_900
+            description = str(template["description"])
             if category == "running_shoes":
                 use_case = RUNNING_USE_CASES[index % len(RUNNING_USE_CASES)]
                 arch_support = RUNNING_ARCH_SUPPORT[index % len(RUNNING_ARCH_SUPPORT)]
+                terrain = "trail" if use_case == "trail" else "road"
+                cushioning = ("low", "medium", "high")[index % 3]
+                drop_mm = (4, 6, 8, 10)[index % 4]
                 raw_attrs["use_case"] = use_case
                 raw_attrs["arch_support"] = arch_support
-                raw_attrs["terrain"] = "trail" if use_case == "trail" else "road"
-                raw_attrs["cushioning"] = ("low", "medium", "high")[index % 3]
-                raw_attrs["drop_mm"] = (4, 6, 8, 10)[index % 4]
-                price_paise = max(249_900, price_paise)
-                if arch_support == "motion_control":
-                    price_paise = max(350_000, price_paise)
+                raw_attrs["terrain"] = terrain
+                raw_attrs["cushioning"] = cushioning
+                raw_attrs["drop_mm"] = drop_mm
+                # T-003c demand gap: no motion-control shoe below the floor, so the
+                # T-010 unmet-demand query has a real finding to surface.
+                floor = 350_000 if arch_support == "motion_control" else 249_900
+                price_paise = spread_price(template_price, index, floor)
+                description = running_shoe_description(
+                    str(template["brand"]), arch_support, use_case, terrain, cushioning, drop_mm
+                )
             else:
-                price_paise = max(39_900, price_paise)
+                price_paise = spread_price(template_price, index, 39_900)
 
             edition = index + 1
             expanded.append(
@@ -106,11 +152,7 @@ def expand_catalog(products: list[dict[str, object]]) -> list[dict[str, object]]
                     "title": f"{template['title']} Series {edition}",
                     "subcategory": f"{template['subcategory']}_series",
                     "price_paise": price_paise,
-                    "description": (
-                        f"{template['description']} Series {edition} adds a distinct fit "
-                        "and finish "
-                        "for the Stride & Stone catalog."
-                    ),
+                    "description": description,
                     "attrs": raw_attrs,
                 }
             )

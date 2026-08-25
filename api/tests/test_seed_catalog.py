@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import func, select
@@ -180,3 +181,54 @@ def test_non_footwear_product_documents_exclude_footwear_vocabulary() -> None:
     gps_watch = next(product for product in load_products() if product["sku"] == "KORA-GPS-ONE")
     document = product_document(gps_watch).lower()
     assert not any(word in document for word in ("arch_support", "terrain", "drop", "cushioning"))
+
+
+def test_generated_prose_never_contradicts_structured_attributes() -> None:
+    """A description that disagrees with its own row poisons retrieval and the UI.
+
+    The catalog expansion reassigns arch support and terrain on a cycle. If generated rows
+    inherit an archetype's prose, the embedded text (T-004) and the computed match_reasons
+    shown on a product card (D-012) end up asserting opposite things about the same shoe.
+    """
+    arch_vocabulary = {
+        "neutral": "neutral",
+        "stability": "stability",
+        "motion_control": "motion-control",
+    }
+    conflicts: list[str] = []
+    for product in load_products():
+        if product["category"] != "running_shoes":
+            continue
+        footwear = product["attrs"]["footwear"]
+        description = str(product["description"]).lower()
+        for arch, token in arch_vocabulary.items():
+            if token in description and arch != footwear["arch_support"]:
+                conflicts.append(
+                    f"{product['sku']}: text says {token}, "
+                    f"attrs say {footwear['arch_support']}"
+                )
+        if "trail" in description and footwear["terrain"] != "trail":
+            conflicts.append(
+                f"{product['sku']}: text says trail, attrs say {footwear['terrain']}"
+            )
+
+    assert not conflicts, "description contradicts attributes:\n" + "\n".join(conflicts[:10])
+
+
+def test_running_shoe_prices_are_not_clustered_on_a_floor() -> None:
+    """Clamping to a price floor piles rows onto one value and makes budget edges look fake."""
+    shoes = [product for product in load_products() if product["category"] == "running_shoes"]
+    prices = [int(cast(int, product["price_paise"])) for product in shoes]
+    assert len(set(prices)) >= int(len(shoes) * 0.8), "running-shoe prices are too clustered"
+
+
+def test_motion_control_demand_gap_is_preserved() -> None:
+    """T-010's unmet-demand insight needs a real gap, not an empty table."""
+    shoes = [product for product in load_products() if product["category"] == "running_shoes"]
+    motion_control = [
+        product
+        for product in shoes
+        if product["attrs"]["footwear"]["arch_support"] == "motion_control"
+    ]
+    assert motion_control, "catalog must contain motion-control shoes"
+    assert min(int(cast(int, p["price_paise"])) for p in motion_control) >= 350_000
